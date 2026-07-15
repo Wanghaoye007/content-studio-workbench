@@ -55,6 +55,7 @@ export function ContextToolPanel(props: ContextToolPanelProps) {
       aria-label={`${profile.label}参数`}
       className="context-panel"
       data-placement={props.placement ?? 'right'}
+      data-tool={props.tool}
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return;
         event.preventDefault();

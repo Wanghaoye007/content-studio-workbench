@@ -78,10 +78,14 @@ export function JobCanvasNode({ data }: NodeProps<Node<JobNodeData, 'job'>>) {
       data-stage={getJobStageLabel(data.job)}
     >
       <Handle type="target" position={Position.Left} />
-      <span>{data.profile.label}</span>
-      <strong>{getJobStageLabel(data.job)}</strong>
-      <progress value={data.job.progress} max={100} aria-label="任务生成进度" />
-      <small>{data.job.progress}%</small>
+      <img alt="" className="job-node__preview" src={data.previewImageUrl} />
+      <span aria-hidden="true" className="job-node__scrim" />
+      <div className="job-node__progress">
+        <span>{data.profile.label}</span>
+        <strong>{getJobStageLabel(data.job)}</strong>
+        <progress value={data.job.progress} max={100} aria-label="任务生成进度" />
+        <small>{data.job.progress}%</small>
+      </div>
       <Handle type="source" position={Position.Right} />
     </article>
   );

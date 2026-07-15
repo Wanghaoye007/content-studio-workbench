@@ -60,7 +60,7 @@ export function LightOverlay({
   };
 
   return (
-    <div aria-label="定向光控制" className="light-overlay nodrag" style={style}>
+    <div aria-label="定向光控制" className="light-overlay nodrag" data-overlay="light" style={style}>
       <span className="light-overlay__beam" />
       {lightDirections.map((item) => (
         <button
@@ -106,6 +106,7 @@ export function ExpandOverlay({
     <div
       aria-label="扩图构图区域"
       className="expand-overlay nodrag"
+      data-overlay="expand"
       data-ratio={ratio}
       data-scale={scale}
       style={style}
@@ -136,6 +137,7 @@ export function AnglePreview({
     <div
       aria-label="视角预览"
       className="angle-preview nodrag"
+      data-overlay="angle"
       data-horizontal={horizontal}
       data-vertical={vertical}
       style={style}

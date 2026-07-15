@@ -65,6 +65,7 @@ export type JobNodeData = {
   kind: 'job';
   job: StudioState['jobs'][number];
   profile: ReturnType<typeof getProfile>;
+  previewImageUrl: string;
 };
 
 export type ResultNodeData = {
@@ -124,7 +125,12 @@ export function buildCanvasGraph(
     id: `job:${job.id}`,
     type: 'job',
     position: { x: job.x, y: job.y },
-    data: { kind: 'job', job, profile: getProfile(job.profileId) },
+    data: {
+      kind: 'job',
+      job,
+      profile: getProfile(job.profileId),
+      previewImageUrl: state.scenes.find((scene) => scene.id === job.sceneId)?.imageUrl ?? '',
+    },
   }));
   const resultNodes: Node<ResultNodeData>[] = state.results.map((result) => ({
     id: `result:${result.id}`,

@@ -83,6 +83,9 @@ describe('workbench canvas', () => {
       `result:${settled.results[0].id}`,
     ]);
     expect(graph.edges).toHaveLength(2);
+    expect(graph.nodes.find((node) => node.id === `job:${settled.jobs[0].id}`)).toMatchObject({
+      data: { previewImageUrl: settled.scenes[0].imageUrl },
+    });
     expect(graph.edges[0]).toMatchObject({
       source: 'scene:scene-source',
       target: `job:${settled.jobs[0].id}`,
@@ -294,6 +297,19 @@ describe('workbench canvas', () => {
     fireEvent.click(screen.getByRole('button', { name: '右上光' }));
 
     expect(screen.getByLabelText('定向光控制点')).toHaveAttribute('data-direction', 'top-right');
+  });
+
+  it('exposes stable state hooks for visual frame comparison', () => {
+    render(<WorkbenchHarness />);
+
+    fireEvent.click(screen.getByRole('button', { name: '定向光' }));
+
+    const panel = screen.getByRole('dialog', { name: '定向光参数' });
+    const overlay = screen.getByLabelText('定向光控制');
+    expect(panel).toHaveAttribute('data-placement', 'right');
+    expect(panel).toHaveAttribute('data-tool', 'light');
+    expect(overlay).toHaveAttribute('data-overlay', 'light');
+    expect(overlay.closest('.canvas-node')).toHaveAttribute('data-interaction-mode', 'editing-light');
   });
 
   it('shows an image boundary and nine-cell grid only while expanding', () => {
