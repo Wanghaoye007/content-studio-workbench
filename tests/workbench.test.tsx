@@ -3,11 +3,13 @@ import { StrictMode, useEffect, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
+  approveResult,
   completeJob,
   createDerivedScene,
   createJob,
   failJob,
   initialStudioState,
+  submitForReview,
   type Result,
   type StudioState,
 } from '../src/domain';
@@ -20,6 +22,7 @@ import {
 import { DraftTaskNode } from '../src/workbench/DraftTaskNode';
 import { buildCanvasGraph, getOperationLabel } from '../src/workbench/graph';
 import { NodeTypePicker } from '../src/workbench/NodeTypePicker';
+import { ResultCompare } from '../src/workbench/ResultCompare';
 import { SceneRail } from '../src/workbench/SceneRail';
 import { Workbench } from '../src/workbench/Workbench';
 
@@ -58,6 +61,22 @@ function WorkbenchHarness({
   }, [onStateChange, state]);
 
   return <Workbench state={state} setState={setState} />;
+}
+
+function ResultCompareHarness({ results }: { results: Result[] }) {
+  const [open, setOpen] = useState(false);
+  const [visibleResults, setVisibleResults] = useState(results);
+
+  return (
+    <ResultCompare
+      onClose={() => setOpen(false)}
+      onInspect={vi.fn()}
+      onOpen={() => setOpen(true)}
+      onRemove={(resultId) => setVisibleResults((current) => current.filter((result) => result.id !== resultId))}
+      open={open}
+      results={visibleResults}
+    />
+  );
 }
 
 function createDataTransfer(assetId: string): DataTransfer {
@@ -611,6 +630,80 @@ describe('workbench canvas', () => {
     expect(graph.nodes.find((node) => node.id === 'result:result-2')).toMatchObject({
       data: { compareSelected: false },
     });
+  });
+
+  it('moves results through favorite, adoption, comparison, and shared zoom', () => {
+    const queued = createJob(initialStudioState(), {
+      sceneId: 'scene-source', profileId: 'generate', outputCount: 3,
+    });
+    const settled = completeJob(queued, queued.jobs[0].id, {
+      successfulOutputs: 3, actualCredits: 45,
+    });
+
+    let latestState = settled;
+    const workbench = render(
+      <WorkbenchHarness initialState={settled} onStateChange={(state) => { latestState = state; }} />,
+    );
+
+    fireEvent.click(screen.getAllByRole('button', { name: '收藏结果' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: '采用结果' })[0]);
+    expect(screen.getByRole('button', { name: '取消收藏' })).toBeInTheDocument();
+    expect(latestState.results[0]).toMatchObject({ isFavorite: true, isAdopted: true, isPrimary: true });
+
+    workbench.unmount();
+    render(<ResultCompareHarness results={settled.results.slice(0, 2)} />);
+    const compareTray = screen.getByLabelText('结果对比栏');
+    expect(within(compareTray).getByText('已选 2 / 4')).toBeInTheDocument();
+
+    fireEvent.click(within(compareTray).getByRole('button', { name: '开始对比' }));
+    const compareDialog = screen.getByRole('dialog', { name: '结果对比' });
+    expect(within(compareDialog).getAllByRole('img')).toHaveLength(2);
+    fireEvent.change(within(compareDialog).getByRole('slider', { name: '对比缩放' }), {
+      target: { value: '150' },
+    });
+    expect(within(compareDialog).getByText('150%')).toBeInTheDocument();
+    fireEvent.click(within(compareDialog).getByRole('button', { name: '关闭结果对比' }));
+    expect(screen.queryByRole('dialog', { name: '结果对比' })).not.toBeInTheDocument();
+  });
+
+  it('inspects an approved result and records a configured production export', () => {
+    const queued = createJob(initialStudioState(), {
+      sceneId: 'scene-source', profileId: 'generate', outputCount: 1, ratio: '4:5',
+    });
+    const settled = completeJob(queued, queued.jobs[0].id, {
+      successfulOutputs: 1, actualCredits: 15,
+    });
+    const approved = approveResult(
+      submitForReview(settled, settled.results[0].id),
+      settled.results[0].id,
+      '青井审核员',
+    );
+    let latestState = approved;
+
+    render(<WorkbenchHarness initialState={approved} onStateChange={(state) => { latestState = state; }} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '查看结果详情' }));
+    const inspector = screen.getByRole('complementary', { name: '结果详情' });
+    expect(within(inspector).getByText('2048 x 2048')).toBeInTheDocument();
+    expect(within(inspector).getByText('4:5')).toBeInTheDocument();
+    expect(within(inspector).getByText('源场景')).toBeInTheDocument();
+    fireEvent.click(within(inspector).getByRole('button', { name: '配置生产导出' }));
+
+    const exportDialog = screen.getByRole('dialog', { name: '生产导出' });
+    fireEvent.change(within(exportDialog).getByRole('combobox', { name: '文件格式' }), {
+      target: { value: 'webp' },
+    });
+    fireEvent.change(within(exportDialog).getByRole('combobox', { name: '输出尺寸' }), {
+      target: { value: '1080' },
+    });
+    expect(within(exportDialog).getByText(/PIAS_PIAS-SF-001_.*\.webp/)).toBeInTheDocument();
+    fireEvent.click(within(exportDialog).getByRole('button', { name: '生成生产导出' }));
+
+    expect(latestState.auditEvents.at(-1)).toMatchObject({
+      type: 'result.exported',
+      targetId: 'result-1',
+    });
+    expect(screen.getByLabelText('画布操作反馈')).toHaveTextContent('导出任务已创建');
   });
 
   it('opens a Chinese context panel from the floating tool palette', () => {

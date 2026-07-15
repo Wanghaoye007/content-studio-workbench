@@ -26,6 +26,7 @@ import {
   type SetStateAction,
 } from 'react';
 import {
+  buildExportFilename,
   cancelJob,
   completeJob,
   createBlankScene,
@@ -37,14 +38,21 @@ import {
   getNextSceneId,
   getProfile,
   moveCanvasItem,
+  recordResultExport,
   renameScene,
+  setPrimaryResult,
+  setResultQualityIssue,
   setSelectedScene,
   setSelectedTool,
   submitForReview,
+  toggleResultAdoption,
+  toggleResultFavorite,
   updateJobProgress,
   type CanvasNodeKind,
   type Asset,
+  type ExportSpec,
   type GenerationJob,
+  type QualityIssue,
   type Result,
   type Scene,
   type StudioState,
@@ -55,7 +63,10 @@ import { JobCanvasNode, canvasNodeTypes, getReviewStatusLabel } from './CanvasNo
 import { CanvasCommandBar } from './CanvasCommandBar';
 import { ContextToolPanel } from './ContextToolPanel';
 import { DraftTaskNode } from './DraftTaskNode';
+import { ExportDialog } from './ExportDialog';
 import { NodeTypePicker } from './NodeTypePicker';
+import { ResultCompare } from './ResultCompare';
+import { ResultInspector } from './ResultInspector';
 import { SceneRail } from './SceneRail';
 import { TaskTray } from './TaskTray';
 import { ToolPalette } from './ToolPalette';
@@ -183,6 +194,10 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
   const [nodeDialog, setNodeDialog] = useState<NodeDialog>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [canvasNotice, setCanvasNotice] = useState<CanvasNotice | null>(null);
+  const [compareResultIds, setCompareResultIds] = useState<string[]>([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [inspectedResultId, setInspectedResultId] = useState<string | null>(null);
+  const [exportResultId, setExportResultId] = useState<string | null>(null);
   const scheduledJobTimers = useRef(new Map<string, number[]>());
   const toolTriggerRef = useRef<HTMLButtonElement | null>(null);
   const canvasStageRef = useRef<HTMLElement | null>(null);
@@ -276,6 +291,43 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     setState((current) => submitForReview(current, resultId));
   }, [setState]);
 
+  const handleToggleFavorite = useCallback((resultId: string) => {
+    setState((current) => toggleResultFavorite(current, resultId));
+  }, [setState]);
+
+  const handleToggleAdoption = useCallback((resultId: string) => {
+    setState((current) => toggleResultAdoption(current, resultId, 'Mika Tanaka'));
+  }, [setState]);
+
+  const handleSetPrimary = useCallback((resultId: string) => {
+    setState((current) => setPrimaryResult(current, resultId, 'Mika Tanaka'));
+  }, [setState]);
+
+  const handleOpenDetails = useCallback((resultId: string) => {
+    dispatchInteraction({ type: 'CLOSE_TOOL' });
+    setInspectedResultId(resultId);
+  }, []);
+
+  const handleToggleCompare = useCallback((resultId: string) => {
+    setCompareResultIds((current) => {
+      if (current.includes(resultId)) {
+        const next = current.filter((id) => id !== resultId);
+        if (next.length < 2) setCompareOpen(false);
+        return next;
+      }
+      if (current.length >= 4) {
+        setCanvasNotice({ message: '最多同时对比 4 张结果', tone: 'warning' });
+        return current;
+      }
+      return [...current, resultId];
+    });
+  }, []);
+
+  const handleQualityIssue = useCallback((resultId: string, issue: QualityIssue) => {
+    setState((current) => setResultQualityIssue(current, resultId, issue, 'Mika Tanaka'));
+    setCanvasNotice({ message: '不可用原因已记录，不会用于模型训练', tone: 'success' });
+  }, [setState]);
+
   const handleParameterChange = useCallback((key: string, value: string | number) => {
     setToolParameters((current) => ({ ...current, [key]: value }));
   }, []);
@@ -366,17 +418,27 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     state,
     selectedNodeId,
     activeTool,
-    { onCreateNode: handleCreateNode, onDerive: handleDerive, onSubmitReview: handleSubmitReview },
+    {
+      onCreateNode: handleCreateNode,
+      onDerive: handleDerive,
+      onSubmitReview: handleSubmitReview,
+      onToggleFavorite: handleToggleFavorite,
+      onToggleAdoption: handleToggleAdoption,
+      onSetPrimary: handleSetPrimary,
+      onToggleCompare: handleToggleCompare,
+      onOpenDetails: handleOpenDetails,
+    },
     {
       mode: interaction.mode,
       parameters: toolParameters,
       ratio,
       dropTargetNodeId: dragTargetNodeId,
+      compareResultIds,
       draftNode: interaction.draftNode,
       onCancelDraft: cancelDraftNode,
       onParameterChange: handleParameterChange,
     },
-  ), [activeTool, cancelDraftNode, dragTargetNodeId, handleCreateNode, handleDerive, handleParameterChange, handleSubmitReview, interaction.draftNode, interaction.mode, ratio, selectedNodeId, state, toolParameters]);
+  ), [activeTool, cancelDraftNode, compareResultIds, dragTargetNodeId, handleCreateNode, handleDerive, handleOpenDetails, handleParameterChange, handleSetPrimary, handleSubmitReview, handleToggleAdoption, handleToggleCompare, handleToggleFavorite, interaction.draftNode, interaction.mode, ratio, selectedNodeId, state, toolParameters]);
 
   const handleToolSelect = (tool: TaskProfileId, trigger: HTMLButtonElement) => {
     markUserGesture();
@@ -672,6 +734,24 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     onCancel: handleCancel,
     onRetry: handleRetry,
   }), [handleCancel, handleRetry]);
+  const comparedResults = compareResultIds
+    .map((resultId) => state.results.find((result) => result.id === resultId))
+    .filter((result): result is Result => Boolean(result));
+  const inspectedResult = state.results.find((result) => result.id === inspectedResultId);
+  const inspectedScene = inspectedResult
+    ? state.scenes.find((scene) => scene.id === inspectedResult.sourceSceneId)
+    : undefined;
+  const inspectedJob = inspectedResult
+    ? state.jobs.find((job) => job.id === inspectedResult.jobId)
+    : undefined;
+  const exportResult = state.results.find((result) => result.id === exportResultId);
+
+  const handleExport = (result: Result, spec: ExportSpec) => {
+    const filename = buildExportFilename(state, result.id, spec);
+    setState((current) => recordResultExport(current, result.id, 'Mika Tanaka', spec));
+    setExportResultId(null);
+    setCanvasNotice({ message: `导出任务已创建：${filename}`, tone: 'success' });
+  };
 
   return (
     <div className={`workbench ${railCollapsed ? 'is-rail-collapsed' : ''}`}>
@@ -741,7 +821,10 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
           </ReactFlow>
         </JobActionsContext.Provider>
         <MobileResultPreview
+          onOpenDetails={handleOpenDetails}
           onSubmitReview={handleSubmitReview}
+          onToggleAdoption={handleToggleAdoption}
+          onToggleFavorite={handleToggleFavorite}
           results={state.results}
         />
         <ToolPalette activeTool={activeTool} onSelect={handleToolSelect} />
@@ -782,6 +865,39 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
             referenceAssetId={referenceAssetId}
             ratio={ratio}
             tool={activeTool}
+          />
+        )}
+        <ResultCompare
+          onClose={() => setCompareOpen(false)}
+          onInspect={(resultId) => {
+            setCompareOpen(false);
+            handleOpenDetails(resultId);
+          }}
+          onOpen={() => setCompareOpen(true)}
+          onRemove={handleToggleCompare}
+          open={compareOpen}
+          results={comparedResults}
+        />
+        {inspectedResult && inspectedScene && inspectedJob && (
+          <ResultInspector
+            job={inspectedJob}
+            onClose={() => setInspectedResultId(null)}
+            onOpenExport={() => setExportResultId(inspectedResult.id)}
+            onQualityIssue={(issue) => handleQualityIssue(inspectedResult.id, issue)}
+            onSetPrimary={() => handleSetPrimary(inspectedResult.id)}
+            onSubmitReview={() => handleSubmitReview(inspectedResult.id)}
+            onToggleAdoption={() => handleToggleAdoption(inspectedResult.id)}
+            onToggleFavorite={() => handleToggleFavorite(inspectedResult.id)}
+            result={inspectedResult}
+            scene={inspectedScene}
+          />
+        )}
+        {exportResult && (
+          <ExportDialog
+            buildFilename={(spec) => buildExportFilename(state, exportResult.id, spec)}
+            onClose={() => setExportResultId(null)}
+            onSubmit={(spec) => handleExport(exportResult, spec)}
+            result={exportResult}
           />
         )}
         {nodeDialog === 'rename' && commandScene && (
@@ -857,9 +973,15 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
 function MobileResultPreview({
   results,
   onSubmitReview,
+  onOpenDetails,
+  onToggleAdoption,
+  onToggleFavorite,
 }: {
   results: Result[];
   onSubmitReview: (resultId: string) => void;
+  onOpenDetails: (resultId: string) => void;
+  onToggleAdoption: (resultId: string) => void;
+  onToggleFavorite: (resultId: string) => void;
 }) {
   return (
     <section aria-label="移动端结果预览" className="mobile-preview">
@@ -879,6 +1001,23 @@ function MobileResultPreview({
                 {result.reviewComment && <small>{result.reviewComment}</small>}
               </div>
               <div className="mobile-preview__actions">
+                <button
+                  aria-label={result.isFavorite ? '取消收藏' : '收藏结果'}
+                  onClick={() => onToggleFavorite(result.id)}
+                  type="button"
+                >
+                  {result.isFavorite ? '已收藏' : '收藏'}
+                </button>
+                <button
+                  aria-label={result.isAdopted ? '取消采用' : '采用结果'}
+                  onClick={() => onToggleAdoption(result.id)}
+                  type="button"
+                >
+                  {result.isAdopted ? '已采用' : '采用'}
+                </button>
+                <button aria-label="查看结果详情" onClick={() => onOpenDetails(result.id)} type="button">
+                  详情
+                </button>
                 {canSubmit && (
                   <button aria-label="提交审核" onClick={() => onSubmitReview(result.id)} type="button">
                     {result.reviewStatus === 'returned' ? '重新提交' : '提交审核'}
