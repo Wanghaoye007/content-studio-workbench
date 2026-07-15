@@ -1,5 +1,24 @@
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
 export type ReviewStatus = 'draft' | 'submitted' | 'approved' | 'returned';
+export type QualityIssue =
+  | 'product-deformation'
+  | 'text-logo'
+  | 'material'
+  | 'composition'
+  | 'lighting'
+  | 'background'
+  | 'dimensions'
+  | 'content-safety'
+  | 'other';
+export type ExportFormat = 'png' | 'jpeg' | 'webp';
+export type ExportSize = 'original' | '1080' | '2048';
+
+export type ExportSpec = {
+  format: ExportFormat;
+  size: ExportSize;
+  includeManifestCsv: boolean;
+  includeManifestJson: boolean;
+};
 
 export type CanvasNodeKind = 'scene' | 'job' | 'result';
 export type CanvasPosition = { x: number; y: number };
@@ -89,6 +108,24 @@ export type Result = {
   approvedBy?: string;
   reviewedBy?: string;
   reviewComment?: string;
+  isFavorite?: boolean;
+  isAdopted?: boolean;
+  isPrimary?: boolean;
+  adoptedBy?: string;
+  adoptedAt?: string;
+  qualityIssue?: QualityIssue;
+  width?: number;
+  height?: number;
+  createdAt?: string;
+};
+
+export type ResultManifestEntry = {
+  resultId: string;
+  skuCode: string;
+  dimensions: string;
+  operation: string;
+  generatedAt: string;
+  reviewStatus: ReviewStatus;
 };
 
 export type Asset = {
@@ -536,6 +573,12 @@ export function completeJob(
       title: `${getProfile(job.profileId).label} ${index + 1}`,
       imageUrl: resultImages[(state.results.length + index) % resultImages.length],
       reviewStatus: 'draft' as ReviewStatus,
+      isFavorite: false,
+      isAdopted: false,
+      isPrimary: false,
+      width: 2048,
+      height: 2048,
+      createdAt: new Date().toISOString(),
       x: job.x + 280 + index * 220,
       y: job.y,
     };
@@ -699,6 +742,154 @@ export function returnResult(
   };
 }
 
+export function toggleResultFavorite(state: StudioState, resultId: string): StudioState {
+  const result = findResult(state, resultId);
+  const isFavorite = !result.isFavorite;
+
+  return {
+    ...state,
+    results: state.results.map((item) => item.id === resultId ? { ...item, isFavorite } : item),
+    auditEvents: [
+      ...state.auditEvents,
+      audit(isFavorite ? 'result.favorited' : 'result.unfavorited', resultId, 'Mika Tanaka'),
+    ],
+  };
+}
+
+export function toggleResultAdoption(state: StudioState, resultId: string, actor: string): StudioState {
+  const result = findResult(state, resultId);
+  const isAdopted = !result.isAdopted;
+  const hasPrimary = state.results.some((item) => (
+    item.sourceSceneId === result.sourceSceneId && item.isPrimary && item.id !== resultId
+  ));
+  const replacementPrimaryId = !isAdopted && result.isPrimary
+    ? state.results.find((item) => (
+      item.sourceSceneId === result.sourceSceneId && item.isAdopted && item.id !== resultId
+    ))?.id
+    : undefined;
+  const adoptedAt = new Date().toISOString();
+
+  return {
+    ...state,
+    results: state.results.map((item) => {
+      if (item.id === resultId) {
+        return isAdopted
+          ? {
+              ...item,
+              isAdopted: true,
+              isPrimary: !hasPrimary,
+              adoptedBy: actor,
+              adoptedAt,
+            }
+          : {
+              ...item,
+              isAdopted: false,
+              isPrimary: false,
+              adoptedBy: undefined,
+              adoptedAt: undefined,
+            };
+      }
+      return item.id === replacementPrimaryId ? { ...item, isPrimary: true } : item;
+    }),
+    auditEvents: [
+      ...state.auditEvents,
+      audit(isAdopted ? 'result.adopted' : 'result.unadopted', resultId, actor),
+    ],
+  };
+}
+
+export function setPrimaryResult(state: StudioState, resultId: string, actor: string): StudioState {
+  const result = findResult(state, resultId);
+  if (!result.isAdopted) {
+    throw new Error('仅已采用结果可设为主结果');
+  }
+
+  return {
+    ...state,
+    results: state.results.map((item) => item.sourceSceneId === result.sourceSceneId
+      ? { ...item, isPrimary: item.id === resultId }
+      : item),
+    auditEvents: [...state.auditEvents, audit('result.primary_set', resultId, actor)],
+  };
+}
+
+export function setResultQualityIssue(
+  state: StudioState,
+  resultId: string,
+  issue: QualityIssue,
+  actor: string,
+): StudioState {
+  findResult(state, resultId);
+  return {
+    ...state,
+    results: state.results.map((item) => item.id === resultId ? { ...item, qualityIssue: issue } : item),
+    auditEvents: [...state.auditEvents, audit('result.quality_flagged', resultId, actor)],
+  };
+}
+
+export function recordResultExport(
+  state: StudioState,
+  resultId: string,
+  actor: string,
+  _spec: ExportSpec,
+): StudioState {
+  const result = findResult(state, resultId);
+  if (result.reviewStatus !== 'approved') {
+    throw new Error('仅审核通过结果可生成生产导出');
+  }
+
+  return {
+    ...state,
+    auditEvents: [...state.auditEvents, audit('result.exported', resultId, actor)],
+  };
+}
+
+export function buildExportFilename(
+  state: StudioState,
+  resultId: string,
+  spec: ExportSpec,
+  date = new Date(),
+): string {
+  const result = findResult(state, resultId);
+  const scene = state.scenes.find((item) => item.id === result.sourceSceneId);
+  if (!scene) {
+    throw new Error('结果来源场景不存在');
+  }
+  const asset = scene.sourceAssetId
+    ? state.assets.find((item) => item.id === scene.sourceAssetId)
+    : undefined;
+  const brand = asset?.brand ?? state.tenantName;
+  const stamp = [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, '0'),
+    String(date.getUTCDate()).padStart(2, '0'),
+  ].join('');
+  const parts = [brand, scene.skuCode, state.projectName, scene.title, result.title, stamp, 'v1'];
+  return `${parts.map(sanitizeFilenamePart).join('_')}.${spec.format}`;
+}
+
+export function buildResultManifest(state: StudioState, resultIds: string[]): ResultManifestEntry[] {
+  return resultIds.map((resultId) => {
+    const result = findResult(state, resultId);
+    if (result.reviewStatus !== 'approved') {
+      throw new Error('清单只能包含审核通过结果');
+    }
+    const scene = state.scenes.find((item) => item.id === result.sourceSceneId);
+    const job = state.jobs.find((item) => item.id === result.jobId);
+    if (!scene || !job) {
+      throw new Error('结果来源信息不完整');
+    }
+    return {
+      resultId: result.id,
+      skuCode: scene.skuCode,
+      dimensions: `${result.width ?? 2048}x${result.height ?? 2048}`,
+      operation: getProfile(job.profileId).label,
+      generatedAt: result.createdAt ?? '',
+      reviewStatus: result.reviewStatus,
+    };
+  });
+}
+
 export function setSelectedTool(state: StudioState, tool: TaskProfileId): StudioState {
   return { ...state, selectedTool: tool };
 }
@@ -715,6 +906,23 @@ function refreshSceneStatuses(scenes: Scene[], jobs: GenerationJob[]): Scene[] {
     if (sceneJobs.some((job) => job.status === 'queued')) return { ...scene, status: 'queued' };
     return { ...scene, status: sceneJobs.at(-1)!.status };
   });
+}
+
+function findResult(state: StudioState, resultId: string): Result {
+  const result = state.results.find((item) => item.id === resultId);
+  if (!result) {
+    throw new Error(`结果不存在：${resultId}`);
+  }
+  return result;
+}
+
+function sanitizeFilenamePart(value: string): string {
+  return value
+    .trim()
+    .replace(/[\\/:*?"<>|%]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || '未命名';
 }
 
 function audit(type: string, targetId: string, actor: string): AuditEvent {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   approveResult,
+  buildExportFilename,
+  buildResultManifest,
   cancelJob,
   completeJob,
   createBlankScene,
@@ -13,9 +15,14 @@ import {
   getProfile,
   initialStudioState,
   moveCanvasItem,
+  recordResultExport,
   renameScene,
   returnResult,
+  setPrimaryResult,
+  setResultQualityIssue,
   submitForReview,
+  toggleResultAdoption,
+  toggleResultFavorite,
   updateJobProgress,
 } from '../src/domain';
 
@@ -551,5 +558,116 @@ describe('Image Studio domain flow', () => {
     expect(() => createSceneFromAsset(initialStudioState(), {
       assetId: 'missing', position: { x: 0, y: 0 },
     })).toThrow('素材不存在');
+  });
+
+  it('tracks result favorites, adoption, and one primary result per scene', () => {
+    const queued = createJob(initialStudioState(), {
+      sceneId: 'scene-source', profileId: 'generate', outputCount: 3,
+    });
+    const settled = completeJob(queued, queued.jobs[0].id, {
+      successfulOutputs: 3, actualCredits: 45,
+    });
+
+    const favorite = toggleResultFavorite(settled, 'result-1');
+    const firstAdoption = toggleResultAdoption(favorite, 'result-1', 'Mika Tanaka');
+    const secondAdoption = toggleResultAdoption(firstAdoption, 'result-2', 'Mika Tanaka');
+    const secondPrimary = setPrimaryResult(secondAdoption, 'result-2', 'Mika Tanaka');
+
+    expect(favorite.results[0].isFavorite).toBe(true);
+    expect(firstAdoption.results[0]).toMatchObject({
+      isAdopted: true,
+      isPrimary: true,
+      adoptedBy: 'Mika Tanaka',
+    });
+    expect(secondAdoption.results.filter((result) => result.isAdopted)).toHaveLength(2);
+    expect(secondPrimary.results.filter((result) => result.isPrimary).map((result) => result.id)).toEqual(['result-2']);
+    expect(secondPrimary.auditEvents.map((event) => event.type)).toEqual(expect.arrayContaining([
+      'result.favorited',
+      'result.adopted',
+      'result.primary_set',
+    ]));
+  });
+
+  it('reassigns the primary result when the current primary is no longer adopted', () => {
+    const queued = createJob(initialStudioState(), {
+      sceneId: 'scene-source', profileId: 'generate', outputCount: 2,
+    });
+    const settled = completeJob(queued, queued.jobs[0].id, {
+      successfulOutputs: 2, actualCredits: 30,
+    });
+    const withFirst = toggleResultAdoption(settled, 'result-1', 'Mika Tanaka');
+    const withBoth = toggleResultAdoption(withFirst, 'result-2', 'Mika Tanaka');
+    const secondPrimary = setPrimaryResult(withBoth, 'result-2', 'Mika Tanaka');
+
+    const reassigned = toggleResultAdoption(secondPrimary, 'result-2', 'Mika Tanaka');
+
+    expect(reassigned.results.find((result) => result.id === 'result-2')).toMatchObject({
+      isAdopted: false,
+      isPrimary: false,
+    });
+    expect(reassigned.results.find((result) => result.id === 'result-1')).toMatchObject({
+      isAdopted: true,
+      isPrimary: true,
+    });
+    expect(() => setPrimaryResult(settled, 'result-1', 'Mika Tanaka')).toThrow('仅已采用结果可设为主结果');
+  });
+
+  it('records quality feedback without granting production export before approval', () => {
+    const queued = createJob(initialStudioState(), {
+      sceneId: 'scene-source', profileId: 'generate', outputCount: 1,
+    });
+    const settled = completeJob(queued, queued.jobs[0].id, {
+      successfulOutputs: 1, actualCredits: 15,
+    });
+    const flagged = setResultQualityIssue(settled, 'result-1', 'composition', 'Mika Tanaka');
+    const exportSpec = {
+      format: 'png' as const,
+      size: 'original' as const,
+      includeManifestCsv: true,
+      includeManifestJson: true,
+    };
+
+    expect(flagged.results[0].qualityIssue).toBe('composition');
+    expect(flagged.auditEvents.at(-1)).toMatchObject({ type: 'result.quality_flagged' });
+    expect(() => recordResultExport(flagged, 'result-1', 'Mika Tanaka', exportSpec)).toThrow('仅审核通过结果可生成生产导出');
+
+    const approved = approveResult(submitForReview(flagged, 'result-1'), 'result-1', '青井审核员');
+    const exported = recordResultExport(approved, 'result-1', 'Mika Tanaka', exportSpec);
+
+    expect(exported.auditEvents.at(-1)).toMatchObject({
+      type: 'result.exported',
+      targetId: 'result-1',
+      actor: 'Mika Tanaka',
+    });
+  });
+
+  it('builds a sanitized production filename and a traceable approved manifest', () => {
+    const queued = createJob(initialStudioState(), {
+      sceneId: 'scene-source', profileId: 'generate', outputCount: 1,
+      ratio: '4:5',
+    });
+    const settled = completeJob(queued, queued.jobs[0].id, {
+      successfulOutputs: 1, actualCredits: 15,
+    });
+    const approved = approveResult(submitForReview(settled, 'result-1'), 'result-1', '青井审核员');
+    const spec = {
+      format: 'webp' as const,
+      size: '1080' as const,
+      includeManifestCsv: true,
+      includeManifestJson: false,
+    };
+
+    const filename = buildExportFilename(approved, 'result-1', spec, new Date('2026-07-15T00:00:00Z'));
+    const manifest = buildResultManifest(approved, ['result-1']);
+
+    expect(filename).toBe('PIAS_PIAS-SF-001_2026-夏季-SKU-上新_源场景_生成-1_20260715_v1.webp');
+    expect(manifest).toEqual([expect.objectContaining({
+      resultId: 'result-1',
+      skuCode: 'PIAS-SF-001',
+      dimensions: '2048x2048',
+      operation: '生成',
+      reviewStatus: 'approved',
+    })]);
+    expect(() => buildResultManifest(settled, ['result-1'])).toThrow('清单只能包含审核通过结果');
   });
 });
