@@ -151,7 +151,7 @@ export function initialStudioState(): StudioState {
       {
         id: 'asset-main',
         brand: 'PIAS',
-        product: 'Serum Foundation',
+        product: '精华粉底',
         skuCode: 'PIAS-SF-001',
         usage: '主商品图',
         version: 'v3',
@@ -160,7 +160,7 @@ export function initialStudioState(): StudioState {
       {
         id: 'asset-pack',
         brand: 'PIAS',
-        product: 'Skin Care Kit',
+        product: '护肤套装',
         skuCode: 'PIAS-SK-014',
         usage: '包装',
         version: 'v1',
@@ -169,7 +169,7 @@ export function initialStudioState(): StudioState {
       {
         id: 'asset-scene',
         brand: 'PIAS',
-        product: 'Campaign Reference',
+        product: '活动参考',
         skuCode: 'PIAS-REF-SEA',
         usage: '场景参考',
         version: 'v2',
@@ -202,6 +202,9 @@ export function createJob(
   state: StudioState,
   input: { sceneId: string; profileId: TaskProfileId; outputCount: number },
 ): StudioState {
+  if (!Number.isInteger(input.outputCount) || input.outputCount <= 0) {
+    throw new Error('产出数量必须为正整数');
+  }
   const profile = getProfile(input.profileId);
   const source = state.scenes.find((scene) => scene.id === input.sceneId);
   if (!source) {
@@ -333,13 +336,17 @@ export function createSceneFromAsset(
 }
 
 export function updateJobProgress(state: StudioState, jobId: string, progress: number): StudioState {
+  const job = state.jobs.find((item) => item.id === jobId);
+  if (!job || job.status === 'succeeded' || job.status === 'failed' || job.status === 'canceled') {
+    return state;
+  }
+
   return {
     ...state,
     jobs: state.jobs.map((job) =>
       job.id === jobId ? { ...job, status: progress >= 100 ? job.status : 'running', progress } : job,
     ),
     scenes: state.scenes.map((scene) => {
-      const job = state.jobs.find((item) => item.id === jobId);
       return job?.sceneId === scene.id ? { ...scene, status: 'running' } : scene;
     }),
   };

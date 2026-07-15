@@ -11,6 +11,7 @@ import {
   initialStudioState,
   moveCanvasItem,
   submitForReview,
+  updateJobProgress,
 } from '../src/domain';
 
 describe('Image Studio domain flow', () => {
@@ -170,6 +171,19 @@ describe('Image Studio domain flow', () => {
     expect(queued.usage.frozenCredits).toBe(30);
   });
 
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects invalid output count %s without changing state',
+    (outputCount) => {
+      const state = initialStudioState();
+      const before = structuredClone(state);
+
+      expect(() => createJob(state, {
+        sceneId: 'scene-source', profileId: 'generate', outputCount,
+      })).toThrow('正整数');
+      expect(state).toEqual(before);
+    },
+  );
+
   it.each(['succeeded', 'failed', 'canceled'] as const)('rejects every repeated settlement after %s', (terminalStatus) => {
     const queued = createJob(initialStudioState(), {
       sceneId: 'scene-source', profileId: 'generate', outputCount: 1,
@@ -189,6 +203,23 @@ describe('Image Studio domain flow', () => {
     expect(terminal.usage).toEqual(usageBefore);
     expect(terminal.auditEvents).toHaveLength(auditCountBefore);
   });
+
+  it.each(['succeeded', 'failed', 'canceled'] as const)(
+    'ignores late progress events after a %s job settlement',
+    (terminalStatus) => {
+      const queued = createJob(initialStudioState(), {
+        sceneId: 'scene-source', profileId: 'generate', outputCount: 1,
+      });
+      const jobId = queued.jobs[0].id;
+      const terminal = terminalStatus === 'succeeded'
+        ? completeJob(queued, jobId, { successfulOutputs: 1, actualCredits: 15 })
+        : terminalStatus === 'failed'
+          ? failJob(queued, jobId, '服务暂时不可用')
+          : cancelJob(queued, jobId);
+
+      expect(updateJobProgress(terminal, jobId, 48)).toEqual(terminal);
+    },
+  );
 
   it('stores manual positions for scenes, jobs, and results', () => {
     const queued = createJob(initialStudioState(), {
@@ -241,10 +272,16 @@ describe('Image Studio domain flow', () => {
   });
 
   it('creates a source scene when an asset is dropped on the canvas', () => {
-    const next = createSceneFromAsset(initialStudioState(), {
+    const state = initialStudioState();
+    expect(state.assets.map((asset) => asset.product)).toEqual([
+      '精华粉底', '护肤套装', '活动参考',
+    ]);
+
+    const next = createSceneFromAsset(state, {
       assetId: 'asset-pack', position: { x: 420, y: 260 },
     });
     expect(next.scenes.at(-1)).toMatchObject({
+      title: '护肤套装',
       skuCode: 'PIAS-SK-014',
       x: 420,
       y: 260,
