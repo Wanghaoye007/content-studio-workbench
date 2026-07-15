@@ -461,8 +461,48 @@ describe('workbench canvas', () => {
     fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
     fireEvent.click(screen.getByRole('button', { name: /任务队列/ }));
 
-    expect(screen.getAllByText('等待中')).toHaveLength(3);
+    expect(screen.getAllByText('等待中')).toHaveLength(1);
+    expect(screen.getAllByText('等待调度')).toHaveLength(2);
     expect(screen.getByRole('button', { name: '取消任务' })).toBeInTheDocument();
+  });
+
+  it('closes tool layers on submit and focuses the source plus task placeholder', () => {
+    render(<WorkbenchHarness />);
+    reactFlowMocks.fitView.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: '生成' }));
+    fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+    expect(screen.queryByRole('dialog', { name: '生成参数' })).not.toBeInTheDocument();
+    expect(reactFlowMocks.fitView).toHaveBeenCalledWith(expect.objectContaining({ duration: 320 }));
+  });
+
+  it('moves through queue, generation, detail, and completion stages', async () => {
+    vi.useFakeTimers();
+
+    try {
+      render(<WorkbenchHarness />);
+      fireEvent.click(screen.getByRole('button', { name: '生成' }));
+      fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
+      expect(screen.getAllByText('等待调度').length).toBeGreaterThan(0);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(900);
+      });
+      expect(screen.getAllByText('正在生成').length).toBeGreaterThan(0);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2700);
+      });
+      expect(screen.getAllByText('优化细节').length).toBeGreaterThan(0);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2800);
+      });
+      expect(screen.getAllByText('已完成').length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('creates a derived branch and snapshots inputs when a tool runs from a selected result', () => {
@@ -506,7 +546,11 @@ describe('workbench canvas', () => {
         parameters: { lightIntensity: 72 },
       },
     });
-    expect(branchJob.inputSnapshot.parameters).toEqual({ lightIntensity: 72 });
+    expect(branchJob.inputSnapshot.parameters).toEqual({
+      lightDirection: 'top-right',
+      lightIntensity: 72,
+      lightTemperature: 5200,
+    });
   });
 
   it('offers a keyboard-click path for adding an asset to the canvas', () => {
@@ -550,7 +594,7 @@ describe('workbench canvas', () => {
       );
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(1400);
+        await vi.advanceTimersByTimeAsync(6400);
       });
 
       expect(latestState.jobs[0]).toMatchObject({ status: 'succeeded', progress: 100 });
@@ -576,7 +620,7 @@ describe('workbench canvas', () => {
       fireEvent.click(screen.getByRole('button', { name: '取消任务' }));
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(1400);
+        await vi.advanceTimersByTimeAsync(6400);
       });
 
       expect(latestState.jobs[0]).toMatchObject({ status: 'canceled' });
@@ -601,7 +645,8 @@ describe('workbench canvas', () => {
     expect(screen.getAllByText('图像服务暂时不可用')).toHaveLength(2);
     fireEvent.click(screen.getAllByRole('button', { name: '重试任务' })[0]);
 
-    expect(screen.getAllByText('等待中')).toHaveLength(3);
+    expect(screen.getAllByText('等待中')).toHaveLength(1);
+    expect(screen.getAllByText('等待调度')).toHaveLength(2);
     expect(latestState.jobs).toHaveLength(2);
     expect(latestState.jobs[0]).toMatchObject({ id: queued.jobs[0].id, status: 'failed' });
     expect(latestState.jobs[1]).toMatchObject({ status: 'queued' });

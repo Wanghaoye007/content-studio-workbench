@@ -38,3 +38,7 @@ export function buildFocusNodeIds(anchorNodeId: string, targetNodeIds: string[])
 export function shouldApplyAutoFocus(requestRevision: number, userRevision: number): boolean {
   return requestRevision >= userRevision;
 }
+
+export function isUserViewportGesture(event: unknown): boolean {
+  return event !== null && event !== undefined;
+}

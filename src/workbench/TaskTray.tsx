@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, RotateCcw, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { getProfile, type GenerationJob } from '../domain';
-import { getJobStatusLabel } from './CanvasNodes';
+import { getJobStageLabel } from './CanvasNodes';
 
 type TaskTrayProps = {
   jobs: GenerationJob[];
@@ -36,7 +36,7 @@ export function TaskTray({ jobs, onCancel, onRetry }: TaskTrayProps) {
               <article className={`task-row is-${job.status}`} key={job.id}>
                 <div>
                   <strong>{getProfile(job.profileId).label}</strong>
-                  <span>{getJobStatusLabel(job.status)}</span>
+                  <span>{getJobStageLabel(job)}</span>
                   <small>{job.progress}%</small>
                 </div>
                 <progress aria-label={`${getProfile(job.profileId).label}任务进度`} max={100} value={job.progress} />

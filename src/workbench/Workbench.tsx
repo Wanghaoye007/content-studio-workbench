@@ -16,6 +16,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type Dispatch,
@@ -49,7 +50,16 @@ import { SceneRail } from './SceneRail';
 import { TaskTray } from './TaskTray';
 import { ToolPalette } from './ToolPalette';
 import { buildCanvasGraph, type JobNodeData } from './graph';
-import type { InteractionMode } from './interactionMachine';
+import {
+  createInitialInteractionState,
+  reduceWorkbenchInteraction,
+} from './interactionMachine';
+import {
+  buildFocusNodeIds,
+  choosePanelPlacement,
+  isUserViewportGesture,
+  shouldApplyAutoFocus,
+} from './viewportDirector';
 
 type WorkbenchProps = {
   state: StudioState;
@@ -67,21 +77,37 @@ const terminalStatuses = new Set(['succeeded', 'failed', 'canceled']);
 const JobActionsContext = createContext<JobActions>({ onCancel: () => undefined, onRetry: () => undefined });
 const directionLabels: Record<string, string> = { left: '左', right: '右', up: '上', down: '下' };
 const defaultToolParameters: TaskParameters = {
+  sceneTemplate: '日光展台',
+  quality: '精细',
   lightIntensity: 60,
+  lightDirection: 'top-right',
+  lightTemperature: 5200,
   blendStrength: 50,
-  angle: '正面',
+  horizontalAngle: 0,
+  verticalAngle: 0,
+  distance: 50,
   expandDirection: '四周',
+  expandScale: 72,
+  upscaleSize: '2048',
+  detailLevel: 60,
+  brushSize: 42,
+  edgePrecision: 72,
 };
 
 function parametersForTool(tool: TaskProfileId, parameters: TaskParameters): TaskParameters {
-  const parameterKeys: Partial<Record<TaskProfileId, string>> = {
-    light: 'lightIntensity',
-    blend: 'blendStrength',
-    angle: 'angle',
-    expand: 'expandDirection',
+  const parameterKeys: Record<TaskProfileId, string[]> = {
+    generate: ['sceneTemplate', 'quality'],
+    blend: ['blendStrength'],
+    angle: ['horizontalAngle', 'verticalAngle', 'distance'],
+    light: ['lightDirection', 'lightIntensity', 'lightTemperature'],
+    remove: ['brushSize'],
+    extract: ['edgePrecision'],
+    expand: ['expandDirection', 'expandScale'],
+    upscale: ['upscaleSize', 'detailLevel'],
   };
-  const key = parameterKeys[tool];
-  return key === undefined || parameters[key] === undefined ? {} : { [key]: parameters[key] };
+  return Object.fromEntries(parameterKeys[tool]
+    .filter((key) => parameters[key] !== undefined)
+    .map((key) => [key, parameters[key]]));
 }
 const reactFlowAriaLabels: Partial<AriaLabelConfig> = {
   'node.a11yDescription.default': '按回车键选中节点，使用方向键移动节点',
@@ -113,9 +139,12 @@ export function Workbench(props: WorkbenchProps) {
 
 function WorkbenchContent({ state, setState }: WorkbenchProps) {
   const { fitView, screenToFlowPosition } = useReactFlow();
-  const [selectedNodeId, setSelectedNodeId] = useState(`scene:${state.selectedSceneId}`);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+  const [interaction, dispatchInteraction] = useReducer(
+    reduceWorkbenchInteraction,
+    `scene:${state.selectedSceneId}`,
+    createInitialInteractionState,
+  );
+  const selectedNodeId = interaction.selectedNodeIds.at(-1) ?? '';
   const [railCollapsed, setRailCollapsed] = useState(() => (
     typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
@@ -130,6 +159,10 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
   );
   const scheduledJobTimers = useRef(new Map<string, number[]>());
   const toolTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const canvasStageRef = useRef<HTMLElement | null>(null);
+  const userRevisionRef = useRef(0);
+  const pendingFocusRef = useRef<{ nodeIds: string[]; revision: number } | null>(null);
+  const completedFocusRef = useRef<{ jobId: string; revision: number } | null>(null);
 
   useEffect(() => () => {
     scheduledJobTimers.current.forEach((timeoutIds) => {
@@ -142,18 +175,26 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     if (scheduledJobTimers.current.has(jobId)) return;
 
     const timeoutIds: number[] = [];
+    const requestRevision = userRevisionRef.current;
     scheduledJobTimers.current.set(jobId, timeoutIds);
     timeoutIds.push(window.setTimeout(() => {
-      setState((current) => updateJobProgress(current, jobId, 58));
-    }, 500));
+      setState((current) => updateJobProgress(current, jobId, 36));
+    }, 900));
     timeoutIds.push(window.setTimeout(() => {
+      setState((current) => updateJobProgress(current, jobId, 78));
+    }, 3600));
+    timeoutIds.push(window.setTimeout(() => {
+      setState((current) => updateJobProgress(current, jobId, 94));
+    }, 5400));
+    timeoutIds.push(window.setTimeout(() => {
+      completedFocusRef.current = { jobId, revision: requestRevision };
       setState((current) => {
         const job = current.jobs.find((item) => item.id === jobId);
         if (!job || terminalStatuses.has(job.status)) return current;
         return completeJob(current, jobId, { successfulOutputs, actualCredits });
       });
       scheduledJobTimers.current.delete(jobId);
-    }, 1400));
+    }, 6400));
   }, [setState]);
 
   useEffect(() => {
@@ -185,13 +226,14 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
   }, [runJob]);
 
   const handleDerive = useCallback((result: Result) => {
+    userRevisionRef.current += 1;
     const nextSceneId = `scene-${state.scenes.length + 1}`;
     setState((current) => createDerivedScene(current, {
       parentSceneId: result.sourceSceneId,
       sourceResultId: result.id,
       operation: getProfile(current.selectedTool).label,
     }));
-    setSelectedNodeId(`scene:${nextSceneId}`);
+    dispatchInteraction({ type: 'SELECT_NODE', nodeId: `scene:${nextSceneId}` });
   }, [setState, state.scenes.length]);
 
   const handleSubmitReview = useCallback((resultId: string) => {
@@ -202,43 +244,61 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     setToolParameters((current) => ({ ...current, [key]: value }));
   }, []);
 
+  const markUserGesture = useCallback(() => {
+    userRevisionRef.current += 1;
+  }, []);
+
+  const handleMoveStart = useCallback((event: MouseEvent | TouchEvent | null) => {
+    if (isUserViewportGesture(event)) markUserGesture();
+  }, [markUserGesture]);
+
   const graph = useMemo(() => buildCanvasGraph(
     state,
     selectedNodeId,
     state.selectedTool,
     { onDerive: handleDerive, onSubmitReview: handleSubmitReview },
     {
-      mode: panelOpen ? interactionModeForTool(state.selectedTool) : 'node-selected',
+      mode: interaction.mode,
       parameters: toolParameters,
       ratio,
       onParameterChange: handleParameterChange,
     },
-  ), [handleDerive, handleParameterChange, handleSubmitReview, panelOpen, ratio, selectedNodeId, state, toolParameters]);
+  ), [handleDerive, handleParameterChange, handleSubmitReview, interaction.mode, ratio, selectedNodeId, state, toolParameters]);
 
   const handleToolSelect = (tool: TaskProfileId, trigger: HTMLButtonElement) => {
+    markUserGesture();
     toolTriggerRef.current = trigger;
     setState((current) => setSelectedTool(current, tool));
     setOutputCount(getProfile(tool).defaultOutputs);
-    setAssetPickerOpen(false);
-    setPanelOpen(true);
+    dispatchInteraction({ type: 'OPEN_TOOL', tool });
+
+    const stageBounds = canvasStageRef.current?.getBoundingClientRect();
+    const nodeElement = Array.from(document.querySelectorAll<HTMLElement>('.react-flow__node'))
+      .find((element) => element.dataset.id === selectedNodeId);
+    const nodeBounds = nodeElement?.getBoundingClientRect();
+    if (stageBounds && nodeBounds) {
+      dispatchInteraction({
+        type: 'SET_PANEL_PLACEMENT',
+        placement: choosePanelPlacement(nodeBounds, stageBounds, { width: 336, height: 600 }, 16),
+      });
+    }
   };
 
   const handlePanelClose = useCallback(() => {
-    setAssetPickerOpen(false);
-    setPanelOpen(false);
+    dispatchInteraction({ type: 'CLOSE_TOOL' });
     toolTriggerRef.current?.focus();
   }, []);
 
   const handleSceneSelect = (scene: Scene) => {
+    markUserGesture();
     setState((current) => setSelectedScene(current, scene.id));
-    setSelectedNodeId(`scene:${scene.id}`);
+    dispatchInteraction({ type: 'SELECT_NODE', nodeId: `scene:${scene.id}` });
     void fitView({ duration: 300, nodes: [{ id: `scene:${scene.id}` }], padding: 0.2 });
   };
 
   const handleNodeClick = (_event: React.MouseEvent, node: Node) => {
-    setAssetPickerOpen(false);
-    setPanelOpen(false);
-    setSelectedNodeId(node.id);
+    markUserGesture();
+    dispatchInteraction({ type: 'SELECT_NODE', nodeId: node.id });
     const parsed = parseCanvasNodeId(node.id);
     if (!parsed) return;
     setState((current) => {
@@ -269,7 +329,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const nextSceneId = `scene-${state.scenes.length + 1}`;
     setState((current) => createSceneFromAsset(current, { assetId, position }));
-    setSelectedNodeId(`scene:${nextSceneId}`);
+    dispatchInteraction({ type: 'SELECT_NODE', nodeId: `scene:${nextSceneId}` });
   };
 
   const handleAssetAdd = useCallback((asset: Asset) => {
@@ -279,12 +339,23 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
       assetId: asset.id,
       position: { x: 80 + (lane % 3) * 300, y: 420 + Math.floor(lane / 3) * 300 },
     }));
-    setSelectedNodeId(`scene:${nextSceneId}`);
+    dispatchInteraction({ type: 'SELECT_NODE', nodeId: `scene:${nextSceneId}` });
   }, [setState, state.scenes.length]);
 
   const handleRunSelected = useCallback(() => {
     const parsed = parseCanvasNodeId(selectedNodeId);
     const predictedBranchId = parsed?.kind === 'result' ? `scene-${state.scenes.length + 1}` : null;
+    const predictedJobId = `job-${state.jobs.length + 1}`;
+    const focusTargets = [
+      ...(predictedBranchId ? [`scene:${predictedBranchId}`] : []),
+      `job:${predictedJobId}`,
+    ];
+
+    pendingFocusRef.current = {
+      nodeIds: buildFocusNodeIds(selectedNodeId, focusTargets),
+      revision: userRevisionRef.current,
+    };
+    dispatchInteraction({ type: 'SUBMIT' });
 
     setState((current) => {
       let next = current;
@@ -329,9 +400,39 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
         sourceResultId,
       });
     });
+  }, [outputCount, prompt, ratio, referenceAssetId, selectedNodeId, setState, state.jobs.length, state.scenes.length, toolParameters]);
 
-    if (predictedBranchId) setSelectedNodeId(`scene:${predictedBranchId}`);
-  }, [outputCount, prompt, ratio, referenceAssetId, selectedNodeId, setState, state.scenes.length, toolParameters]);
+  useEffect(() => {
+    const request = pendingFocusRef.current;
+    if (!request) return;
+    const availableNodeIds = new Set(graph.nodes.map((node) => node.id));
+    if (!request.nodeIds.every((nodeId) => availableNodeIds.has(nodeId))) return;
+    pendingFocusRef.current = null;
+    if (!shouldApplyAutoFocus(request.revision, userRevisionRef.current)) return;
+    void fitView({
+      duration: 320,
+      nodes: request.nodeIds.map((id) => ({ id })),
+      padding: 0.18,
+    });
+  }, [fitView, graph.nodes]);
+
+  useEffect(() => {
+    const request = completedFocusRef.current;
+    if (!request) return;
+    const job = state.jobs.find((item) => item.id === request.jobId);
+    if (!job || !terminalStatuses.has(job.status)) return;
+    completedFocusRef.current = null;
+    if (job.status !== 'succeeded') return;
+
+    const resultNodeIds = state.results
+      .filter((result) => result.jobId === job.id)
+      .map((result) => `result:${result.id}`);
+    if (resultNodeIds.length === 0 || !shouldApplyAutoFocus(request.revision, userRevisionRef.current)) return;
+
+    const nodeIds = buildFocusNodeIds(`scene:${job.sceneId}`, resultNodeIds);
+    void fitView({ duration: 360, nodes: nodeIds.map((id) => ({ id })), padding: 0.16 });
+    dispatchInteraction({ type: 'SUBMISSION_SETTLED', nodeId: resultNodeIds[0] });
+  }, [fitView, state.jobs, state.results]);
 
   const jobActions = useMemo<JobActions>(() => ({
     onCancel: handleCancel,
@@ -376,6 +477,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
           event.dataTransfer.dropEffect = 'copy';
         }}
         onDrop={handleDrop}
+        ref={canvasStageRef}
       >
         <JobActionsContext.Provider value={jobActions}>
           <ReactFlow
@@ -386,7 +488,9 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
             minZoom={0.3}
             nodes={graph.nodes}
             nodeTypes={workbenchNodeTypes}
+            onMoveStart={handleMoveStart}
             onNodeClick={handleNodeClick}
+            onNodeDragStart={markUserGesture}
             onNodeDragStop={handleNodeDragStop}
           >
             <Background color="#353840" gap={24} size={1} />
@@ -399,13 +503,14 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
           results={state.results}
         />
         <ToolPalette activeTool={state.selectedTool} onSelect={handleToolSelect} />
-        {panelOpen && (
+        {interaction.panelOpen && (
           <ContextToolPanel
-            assetPickerOpen={assetPickerOpen}
+            assetPickerOpen={interaction.assetPickerOpen}
             availableCredits={state.usage.availableCredits}
             assets={state.assets}
-            onAssetPickerClose={() => setAssetPickerOpen(false)}
-            onAssetPickerOpen={() => setAssetPickerOpen(true)}
+            isSubmitting={interaction.mode === 'submitting'}
+            onAssetPickerClose={() => dispatchInteraction({ type: 'CLOSE_ASSET_PICKER' })}
+            onAssetPickerOpen={() => dispatchInteraction({ type: 'OPEN_ASSET_PICKER' })}
             onClose={handlePanelClose}
             onOutputCountChange={setOutputCount}
             onParameterChange={handleParameterChange}
@@ -415,6 +520,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
             onRun={handleRunSelected}
             outputCount={outputCount}
             parameters={toolParameters}
+            placement={interaction.panelPlacement}
             prompt={prompt}
             referenceAssetId={referenceAssetId}
             ratio={ratio}
@@ -500,11 +606,4 @@ function parseCanvasNodeId(nodeId: string): { kind: CanvasNodeKind; id: string }
   const id = nodeId.slice(separatorIndex + 1);
   if (!id || (kind !== 'scene' && kind !== 'job' && kind !== 'result')) return null;
   return { kind, id };
-}
-
-function interactionModeForTool(tool: TaskProfileId): InteractionMode {
-  if (tool === 'light') return 'editing-light';
-  if (tool === 'expand') return 'editing-expand';
-  if (tool === 'angle') return 'editing-angle';
-  return 'configuring';
 }

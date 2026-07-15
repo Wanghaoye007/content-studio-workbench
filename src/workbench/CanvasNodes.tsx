@@ -1,5 +1,5 @@
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import type { JobStatus, ReviewStatus, Scene } from '../domain';
+import type { GenerationJob, JobStatus, ReviewStatus, Scene } from '../domain';
 import {
   AnglePreview,
   ExpandOverlay,
@@ -31,6 +31,12 @@ const sceneStatusLabels: Record<Scene['status'], string> = {
 
 export function getJobStatusLabel(status: JobStatus): string {
   return jobStatusLabels[status];
+}
+
+export function getJobStageLabel(job: Pick<GenerationJob, 'progress' | 'status'>): string {
+  if (job.status === 'queued') return '等待调度';
+  if (job.status === 'running') return job.progress >= 70 ? '优化细节' : '正在生成';
+  return getJobStatusLabel(job.status);
 }
 
 export function getReviewStatusLabel(status: ReviewStatus): string {
@@ -67,10 +73,13 @@ export function SceneCanvasNode({ data }: NodeProps<Node<SceneNodeData, 'scene'>
 
 export function JobCanvasNode({ data }: NodeProps<Node<JobNodeData, 'job'>>) {
   return (
-    <article className={`canvas-node job-node is-${data.job.status}`}>
+    <article
+      className={`canvas-node job-node is-${data.job.status}`}
+      data-stage={getJobStageLabel(data.job)}
+    >
       <Handle type="target" position={Position.Left} />
       <span>{data.profile.label}</span>
-      <strong>{getJobStatusLabel(data.job.status)}</strong>
+      <strong>{getJobStageLabel(data.job)}</strong>
       <progress value={data.job.progress} max={100} aria-label="任务生成进度" />
       <small>{data.job.progress}%</small>
       <Handle type="source" position={Position.Right} />

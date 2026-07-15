@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFocusNodeIds,
   choosePanelPlacement,
+  isUserViewportGesture,
   shouldApplyAutoFocus,
 } from '../src/workbench/viewportDirector';
 
@@ -54,5 +55,10 @@ describe('viewport director', () => {
     expect(shouldApplyAutoFocus(3, 4)).toBe(false);
     expect(shouldApplyAutoFocus(4, 4)).toBe(true);
     expect(shouldApplyAutoFocus(5, 4)).toBe(true);
+  });
+
+  it('does not treat programmatic viewport movement as a user gesture', () => {
+    expect(isUserViewportGesture(null)).toBe(false);
+    expect(isUserViewportGesture({ type: 'pointerdown' })).toBe(true);
   });
 });

@@ -46,15 +46,17 @@ describe('PIAS 中文应用框架', () => {
       });
       fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
       fireEvent.click(screen.getByRole('button', { name: /任务队列，1 个进行中任务，展开/ }));
-      expect(screen.getAllByText('等待中')).toHaveLength(3);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
-      });
-      expect(screen.getAllByText('生成中')).toHaveLength(3);
+      expect(screen.getAllByText('等待中')).toHaveLength(1);
+      expect(screen.getAllByText('等待调度')).toHaveLength(2);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(900);
+      });
+      expect(screen.getAllByText('生成中')).toHaveLength(1);
+      expect(screen.getAllByText('正在生成')).toHaveLength(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5500);
       });
 
       expect(screen.queryAllByText('已完成')).not.toHaveLength(0);
@@ -78,12 +80,12 @@ describe('PIAS 中文应用框架', () => {
       fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
+        await vi.advanceTimersByTimeAsync(900);
       });
       fireEvent.click(screen.getByRole('button', { name: '用量' }));
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(900);
+        await vi.advanceTimersByTimeAsync(5500);
       });
 
       const summary = screen.getByLabelText('工作区摘要');
