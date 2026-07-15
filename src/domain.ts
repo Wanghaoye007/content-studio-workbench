@@ -119,11 +119,11 @@ export const taskProfiles: TaskProfile[] = [
 ];
 
 const resultImages = [
-  '/figma_thesea_slides_15_21/slide_15.png',
-  '/figma_thesea_slides_15_21/slide_17.png',
-  '/figma_thesea_slides_15_21/slide_18.png',
-  '/figma_thesea_slides_15_21/slide_20.png',
-  '/figma_thesea_slides_15_21/slide_21.png',
+  '/demo-assets/pias-product-emerald.png',
+  '/demo-assets/pias-product-blue.png',
+  '/demo-assets/pias-product-coral.png',
+  '/demo-assets/pias-product-flatlay.png',
+  '/demo-assets/pias-product-pack.png',
 ];
 
 export function getProfile(profileId: TaskProfileId): TaskProfile {
@@ -155,7 +155,7 @@ export function initialStudioState(): StudioState {
         skuCode: 'PIAS-SF-001',
         usage: '主商品图',
         version: 'v3',
-        imageUrl: '/figma_thesea_slides_15_21/slide_15_after_click.png',
+        imageUrl: '/demo-assets/pias-product-source.png',
       },
       {
         id: 'asset-pack',
@@ -164,7 +164,7 @@ export function initialStudioState(): StudioState {
         skuCode: 'PIAS-SK-014',
         usage: '包装',
         version: 'v1',
-        imageUrl: '/figma_thesea_slides_15_21/slide_17_after_click.png',
+        imageUrl: '/demo-assets/pias-product-pack.png',
       },
       {
         id: 'asset-scene',
@@ -173,7 +173,7 @@ export function initialStudioState(): StudioState {
         skuCode: 'PIAS-REF-SEA',
         usage: '场景参考',
         version: 'v2',
-        imageUrl: '/analysis/contact_sheets/TheSEA_slide18_ai_lighting_contact.jpg',
+        imageUrl: '/demo-assets/pias-product-flatlay.png',
       },
     ],
     scenes: [
@@ -185,7 +185,7 @@ export function initialStudioState(): StudioState {
         status: 'source',
         x: 0,
         y: 40,
-        imageUrl: '/figma_thesea_slides_15_21/slide_15_after_click.png',
+        imageUrl: '/demo-assets/pias-product-source.png',
         resultIds: [],
         sourceAssetId: 'asset-main',
         sourceAssetVersion: 'v3',
