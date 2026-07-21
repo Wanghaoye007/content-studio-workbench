@@ -49,4 +49,9 @@ Key 只在服务端进程读取，不会进入浏览器构建产物。
 ```bash
 npm test
 npm run build
+npm run acceptance:report
 ```
+
+`npm run acceptance` 是生产发布硬门禁：只在自动化检查通过且 `acceptance/manifest.json` 中所有必选业务证据均为 `pass` 时返回成功。`npm run acceptance:report` 执行相同检查并始终输出完整红黄绿报告，适合整改过程使用。
+
+验收制度、PIAS 实查报告和可复用 Prompt 位于 [`docs/acceptance`](docs/acceptance)。当前 MVP 的生产验收结论以该目录中的项目报告为准。

@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "project": "PIAS Image Studio MVP",
+  "target": "production",
+  "requirementsSource": "docs/PRD_企业级AI全链路内容生产工作台_图片MVP_V1.2.md",
+  "checks": [
+    {
+      "id": "FLOW-001",
+      "category": "business",
+      "severity": "P0",
+      "required": true,
+      "status": "pass",
+      "summary": "八类图片任务可从画布提交到 Fal 队列并生成结果",
+      "evidence": "src/workbench/Workbench.tsx; src/fal/falQueueService.ts; tests/workbench.test.tsx"
+    },
+    {
+      "id": "DATA-001",
+      "category": "data",
+      "severity": "P0",
+      "required": true,
+      "status": "fail",
+      "summary": "业务主数据缺少服务端持久化，刷新页面会回到固定演示状态",
+      "evidence": "src/App.tsx:15; src/App.tsx:33"
+    },
+    {
+      "id": "AUTH-001",
+      "category": "permission",
+      "severity": "P0",
+      "required": true,
+      "status": "missing",
+      "summary": "未实现真实登录、会话、MFA 和服务端角色权限校验",
+      "evidence": "README.md 当前边界; src/App.tsx"
+    },
+    {
+      "id": "ISOLATION-001",
+      "category": "permission",
+      "severity": "P0",
+      "required": true,
+      "status": "missing",
+      "summary": "未实现租户和项目级数据隔离",
+      "evidence": "src/domain.ts:164; StudioState 仅保存名称，不保存主体或访问范围"
+    },
+    {
+      "id": "JOB-001",
+      "category": "state",
+      "severity": "P1",
+      "required": true,
+      "status": "partial",
+      "summary": "任务状态缺少预检、后处理、部分成功、取消请求和过期等生产状态",
+      "evidence": "src/domain.ts:1; PRD 任务生命周期要求"
+    },
+    {
+      "id": "USAGE-001",
+      "category": "data",
+      "severity": "P1",
+      "required": true,
+      "status": "fail",
+      "summary": "运行中任务取消或失败时统一全额释放预占，未按供应商实际成本结算",
+      "evidence": "src/domain.ts settleJob"
+    },
+    {
+      "id": "RECOVERY-001",
+      "category": "robustness",
+      "severity": "P1",
+      "required": true,
+      "status": "partial",
+      "summary": "Fal 请求映射可落盘，但完整任务、结果、审核和用量状态不可恢复",
+      "evidence": "src/fal/falJobPersistence.ts; src/App.tsx:15"
+    },
+    {
+      "id": "REVERSE-001",
+      "category": "business",
+      "severity": "P1",
+      "required": true,
+      "status": "partial",
+      "summary": "具备取消、重试、退回和删除场景，但缺少完整撤回、驳回和生产级恢复闭环",
+      "evidence": "src/domain.ts; src/workbench/Workbench.tsx"
+    },
+    {
+      "id": "REVIEW-001",
+      "category": "state",
+      "severity": "P1",
+      "required": true,
+      "status": "partial",
+      "summary": "审核状态守卫已实现，但操作者为前端固定字符串且不受服务端权限约束",
+      "evidence": "src/SecondaryViews.tsx; src/domain.ts review functions"
+    },
+    {
+      "id": "UI-001",
+      "category": "business",
+      "severity": "P2",
+      "required": true,
+      "status": "fail",
+      "summary": "新建项目、上传素材、邀请成员和部分表头操作为无响应按钮",
+      "evidence": "src/SecondaryViews.tsx"
+    },
+    {
+      "id": "TRACE-001",
+      "category": "traceability",
+      "severity": "P1",
+      "required": true,
+      "status": "pass",
+      "summary": "结果保留模型、请求 ID、参数、种子、时间和上游来源",
+      "evidence": "src/domain.ts ResultGenerationMetadata; src/fal/falJobRunner.ts"
+    },
+    {
+      "id": "LINEAGE-001",
+      "category": "data",
+      "severity": "P1",
+      "required": true,
+      "status": "pass",
+      "summary": "结果派生场景和版本血缘具有状态守卫与审计事件",
+      "evidence": "src/domain.ts createDerivedScene; tests/domain.test.ts"
+    },
+    {
+      "id": "EXPORT-001",
+      "category": "business",
+      "severity": "P1",
+      "required": true,
+      "status": "pass",
+      "summary": "生产导出限制为已批准结果并生成清单和审计记录",
+      "evidence": "src/domain.ts export functions; tests/domain.test.ts"
+    }
+  ],
+  "automation": [
+    {
+      "id": "AUTO-DIFF",
+      "label": "Git whitespace check",
+      "severity": "P1",
+      "command": "git",
+      "args": ["diff", "--check"]
+    },
+    {
+      "id": "AUTO-TEST",
+      "label": "Vitest regression suite",
+      "severity": "P1",
+      "command": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--config",
+        "vitest.config.ts",
+        "--pool=threads",
+        "--maxWorkers=1",
+        "--minWorkers=1"
+      ],
+      "env": {
+        "NODE_OPTIONS": "--max-old-space-size=384"
+      }
+    },
+    {
+      "id": "AUTO-BUILD",
+      "label": "Production build",
+      "severity": "P1",
+      "command": "npm",
+      "args": ["run", "build"],
+      "env": {
+        "NODE_OPTIONS": "--max-old-space-size=512"
+      }
+    }
+  ]
+}
