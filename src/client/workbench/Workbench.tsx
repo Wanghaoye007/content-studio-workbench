@@ -537,7 +537,7 @@ function WorkbenchContent({
     canvasPosition: { x: number; y: number },
   ) => {
     const stageBounds = getUsableStageBounds(canvasStageRef.current);
-    const picker = placeNodePicker(screenPoint, stageBounds, { width: 320, height: 420 }, 16);
+    const picker = placeNodePicker(screenPoint, stageBounds, { width: 320, height: 488 }, 16);
     dispatchInteraction({ type: 'BEGIN_NODE_CONNECTION', sourceNodeId });
     dispatchInteraction({
       type: 'SHOW_NODE_PICKER',
@@ -575,8 +575,7 @@ function WorkbenchContent({
       cancelDraftNode();
       return;
     }
-    const target = event.target;
-    if (!(target instanceof Element) || !target.classList.contains('react-flow__pane')) {
+    if (!isCanvasNodeCreationDropTarget(event.target, canvasStageRef.current)) {
       cancelDraftNode();
       return;
     }
@@ -584,7 +583,8 @@ function WorkbenchContent({
     const pointer = 'changedTouches' in event ? event.changedTouches[0] : event;
     const screenPoint = { x: pointer.clientX, y: pointer.clientY };
     const stageBounds = getUsableStageBounds(canvasStageRef.current);
-    const picker = placeNodePicker(screenPoint, stageBounds, { width: 320, height: 420 }, 16);
+    const picker = placeNodePicker(screenPoint, stageBounds, { width: 320, height: 488 }, 16);
+    dispatchInteraction({ type: 'BEGIN_NODE_CONNECTION', sourceNodeId: connectionState.fromNode.id });
     dispatchInteraction({
       type: 'SHOW_NODE_PICKER',
       screenPosition: picker.position,
@@ -1100,6 +1100,7 @@ function WorkbenchContent({
         )}
         {interaction.mode === 'choosing-node-type' && interaction.draftNode && (
           <NodeTypePicker
+            activeTool={activeTool}
             onClose={cancelDraftNode}
             onSelect={handleDraftToolSelect}
             position={interaction.draftNode.screenPosition}
@@ -1389,6 +1390,24 @@ function getDroppableNodeId(target: EventTarget): string {
   const nodeId = target.closest<HTMLElement>('.react-flow__node')?.dataset.id ?? '';
   const parsed = parseCanvasNodeId(nodeId);
   return parsed && parsed.kind !== 'job' ? nodeId : '';
+}
+
+function isCanvasNodeCreationDropTarget(target: EventTarget | null, stage: HTMLElement | null): boolean {
+  if (!(target instanceof Element) || !stage?.contains(target)) return false;
+  return !target.closest([
+    '.react-flow__node',
+    '.react-flow__controls',
+    '.react-flow__minimap',
+    '.tool-palette',
+    '.canvas-command-bar',
+    '.context-panel',
+    '.node-type-picker',
+    '.asset-picker',
+    '.task-tray',
+    '.result-compare-tray',
+    '.result-inspector',
+    '.node-command-dialog',
+  ].join(','));
 }
 
 function getUsableStageBounds(stage: HTMLElement | null) {
