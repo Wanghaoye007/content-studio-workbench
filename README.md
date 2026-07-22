@@ -45,6 +45,7 @@ npm start
 - [安全边界](docs/SECURITY.md)
 - [部署说明](docs/DEPLOYMENT.md)
 - [环境变量](docs/ENVIRONMENT.md)
+- [局域网部署](docs/operations/lan-deployment.md)
 - [验收说明](docs/ACCEPTANCE.md)
 - [产品需求](docs/PRD_企业级AI全链路内容生产工作台_图片MVP_V1.2.md)
 - [运维手册](docs/operations)

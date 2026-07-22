@@ -17,6 +17,18 @@
 | `CONTENT_STUDIO_RELEASE_REVISION` | 写入发布元数据的 Git revision 覆盖值 |
 | `CONTENT_STUDIO_RELEASE_DIRTY` | 发布元数据的工作树状态覆盖值 |
 
+## 局域网 HTTPS 网关
+
+| 变量 | 用途 |
+| --- | --- |
+| `CONTENT_STUDIO_LAN_HOST` | 网关绑定的具体 RFC 1918 私有 IPv4；不接受 `0.0.0.0` |
+| `CONTENT_STUDIO_LAN_PORT` | 网关 HTTPS 端口，默认 `8443` |
+| `CONTENT_STUDIO_LAN_TLS_CERT_FILE` | 带 LAN IP SAN 的服务证书 |
+| `CONTENT_STUDIO_LAN_TLS_KEY_FILE` | TLS 私钥，权限必须为 `0600` |
+| `CONTENT_STUDIO_BACKUP_DIR` | 局域网实例 SQLite 备份目录 |
+
+局域网模式下 `CONTENT_STUDIO_HOST` 仍须为 `127.0.0.1`，`CONTENT_STUDIO_PUBLIC_BASE_URL` 必须与 LAN Host/Port 组成的 HTTPS Origin 完全一致。
+
 ## 身份、数据与素材
 
 | 变量 | 用途 |

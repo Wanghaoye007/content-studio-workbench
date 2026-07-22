@@ -207,6 +207,9 @@ describe('invitation email delivery', () => {
       encryptionKey: expect.any(Buffer),
     });
     expect(loadInvitationEmailConfig({})).toBeNull();
+    expect(loadInvitationEmailConfig({
+      CONTENT_STUDIO_PUBLIC_BASE_URL: 'https://studio.studio.test',
+    })).toBeNull();
     expect(() => loadInvitationEmailConfig({ CONTENT_STUDIO_EMAIL_FROM: 'partial@studio.test' }))
       .toThrow(expect.objectContaining({ code: 'ORG_EMAIL_CONFIG_INCOMPLETE' }));
     await writeFile(webhookKeyFile, 'insecure', { mode: 0o644 });

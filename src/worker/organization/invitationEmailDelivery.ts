@@ -153,7 +153,13 @@ export function loadInvitationEmailConfig(
     webhookKeyFile: env.CONTENT_STUDIO_EMAIL_WEBHOOK_KEY_FILE?.trim() ?? '',
     encryptionKeyFile: env.CONTENT_STUDIO_INVITATION_ENCRYPTION_KEY_FILE?.trim() ?? '',
   };
-  if (Object.values(values).every((value) => !value)) return null;
+  const emailSpecificValues = [
+    values.from,
+    values.webhookUrl,
+    values.webhookKeyFile,
+    values.encryptionKeyFile,
+  ];
+  if (emailSpecificValues.every((value) => !value)) return null;
   if (Object.values(values).some((value) => !value)) {
     throw new InvitationEmailConfigError(
       '邀请邮件配置不完整',
