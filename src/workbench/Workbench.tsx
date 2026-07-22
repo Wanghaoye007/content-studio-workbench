@@ -11,7 +11,7 @@ import {
   type OnConnectEnd,
   type OnConnectStart,
 } from '@xyflow/react';
-import { CheckCircle2, Coins, FolderKanban, ListChecks } from 'lucide-react';
+import { Aperture, Coins, FolderKanban, ListChecks } from 'lucide-react';
 import {
   createContext,
   useCallback,
@@ -26,20 +26,26 @@ import {
   type SetStateAction,
 } from 'react';
 import {
+  attachExternalJob,
   buildExportFilename,
   cancelJob,
-  completeJob,
+  completeJobWithResults,
   createBlankScene,
   createDerivedScene,
   createJob,
   createSceneFromAsset,
   deleteScene,
   duplicateScene,
+  failJob,
+  expireJob,
   getNextSceneId,
   getProfile,
+  markJobPostprocessing,
   moveCanvasItem,
   recordResultExport,
   renameScene,
+  requestJobCancellation,
+  retryResultGeneration,
   setPrimaryResult,
   setResultQualityIssue,
   setSelectedScene,
@@ -48,10 +54,12 @@ import {
   toggleResultAdoption,
   toggleResultFavorite,
   updateJobProgress,
+  withdrawReview,
   type CanvasNodeKind,
   type Asset,
   type ExportSpec,
   type GenerationJob,
+  type JobStatus,
   type QualityIssue,
   type Result,
   type Scene,
@@ -59,6 +67,14 @@ import {
   type TaskParameters,
   type TaskProfileId,
 } from '../domain';
+import {
+  FAL_LIFECYCLE_ABORT_REASON,
+  resumeFalImageJob,
+  runFalImageJob,
+} from '../fal/falImageClient';
+import { clampFalHorizontalAngle } from '../fal/multipleAngles';
+import { PersistenceStatus } from '../studio/PersistenceStatus';
+import type { StudioSaveStatus } from '../studio/usePersistentStudioState';
 import {
   downloadProductionDelivery,
   downloadWatermarkedPreview,
@@ -88,8 +104,12 @@ import {
 } from './viewportDirector';
 
 type WorkbenchProps = {
+  actorId?: string;
   state: StudioState;
   setState: Dispatch<SetStateAction<StudioState>>;
+  saveStatus?: StudioSaveStatus;
+  onRetrySave?: () => void;
+  onReloadState?: () => void;
 };
 
 type RunJobInput = Parameters<typeof createJob>[1];
@@ -102,36 +122,42 @@ type JobActions = {
 type CanvasNotice = { message: string; tone: 'success' | 'warning' };
 type NodeDialog = 'rename' | 'delete' | null;
 
-const terminalStatuses = new Set(['succeeded', 'failed', 'canceled']);
+const terminalStatuses = new Set<JobStatus>([
+  'partially_succeeded', 'succeeded', 'failed', 'canceled', 'expired',
+]);
+const executableStatuses = new Set<JobStatus>(['preflight', 'queued', 'running']);
+const cancellableStatuses = new Set<JobStatus>(['preflight', 'queued', 'running', 'postprocessing']);
 const JobActionsContext = createContext<JobActions>({ onCancel: () => undefined, onRetry: () => undefined });
 const directionLabels: Record<string, string> = { left: '左', right: '右', up: '上', down: '下' };
 const defaultToolParameters: TaskParameters = {
   sceneTemplate: '日光展台',
   quality: '精细',
-  lightIntensity: 60,
-  lightDirection: 'top-right',
+  lightIntensity: 50,
+  lightDirection: 'front',
   lightTemperature: 5200,
-  blendStrength: 50,
-  horizontalAngle: 0,
-  verticalAngle: 0,
-  distance: 50,
-  expandDirection: '四周',
+  lightSmartMode: false,
+  rimLight: false,
+  productPlacement: 'bottom_center',
+  horizontalAngle: -45,
+  moveForward: 0,
+  verticalView: -0.7,
+  wideAngle: false,
+  expandAnchor: 'center',
   expandScale: 72,
   upscaleSize: '2048',
   detailLevel: 60,
   brushSize: 42,
-  edgePrecision: 72,
 };
 
 function parametersForTool(tool: TaskProfileId, parameters: TaskParameters): TaskParameters {
   const parameterKeys: Record<TaskProfileId, string[]> = {
     generate: ['sceneTemplate', 'quality'],
-    blend: ['blendStrength'],
-    angle: ['horizontalAngle', 'verticalAngle', 'distance'],
-    light: ['lightDirection', 'lightIntensity', 'lightTemperature'],
+    blend: ['productPlacement'],
+    angle: ['horizontalAngle', 'moveForward', 'verticalView', 'wideAngle'],
+    light: ['lightDirection', 'lightIntensity', 'lightTemperature', 'lightSmartMode', 'rimLight'],
     remove: ['brushSize'],
-    extract: ['edgePrecision'],
-    expand: ['expandDirection', 'expandScale'],
+    extract: [],
+    expand: ['expandAnchor', 'expandScale'],
     upscale: ['upscaleSize', 'detailLevel'],
   };
   return Object.fromEntries(parameterKeys[tool]
@@ -167,8 +193,15 @@ export function Workbench(props: WorkbenchProps) {
   );
 }
 
-function WorkbenchContent({ state, setState }: WorkbenchProps) {
-  const { fitView, screenToFlowPosition } = useReactFlow();
+function WorkbenchContent({
+  actorId = 'Mika Tanaka',
+  state,
+  setState,
+  saveStatus = 'saved',
+  onRetrySave = () => undefined,
+  onReloadState = () => undefined,
+}: WorkbenchProps) {
+  const { fitView, getViewport, screenToFlowPosition, setViewport } = useReactFlow();
   const [interaction, dispatchInteraction] = useReducer(
     reduceWorkbenchInteraction,
     `scene:${state.selectedSceneId}`,
@@ -182,15 +215,32 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
       ? state.scenes.find((scene) => scene.id === parsed.id)
       : undefined;
   }, [selectedNodeId, state.scenes]);
+  const panelPreviewImageUrl = useMemo(() => {
+    const parsed = parseCanvasNodeId(selectedNodeId);
+    if (parsed?.kind === 'scene') {
+      return state.scenes.find((scene) => scene.id === parsed.id)?.imageUrl ?? '';
+    }
+    if (parsed?.kind === 'result') {
+      return state.results.find((result) => result.id === parsed.id)?.imageUrl ?? '';
+    }
+    if (parsed?.kind === 'job') {
+      const job = state.jobs.find((item) => item.id === parsed.id);
+      return state.scenes.find((scene) => scene.id === job?.sceneId)?.imageUrl ?? '';
+    }
+    return state.scenes.find((scene) => scene.id === state.selectedSceneId)?.imageUrl
+      ?? state.assets[0]?.imageUrl
+      ?? '';
+  }, [selectedNodeId, state.assets, state.jobs, state.results, state.scenes, state.selectedSceneId]);
   const [railCollapsed, setRailCollapsed] = useState(() => (
     typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
-    && window.matchMedia('(min-width: 768px) and (max-width: 1199px)').matches
+    && window.matchMedia('(min-width: 768px) and (max-width: 899px)').matches
   ));
   const [prompt, setPrompt] = useState('');
   const [outputCount, setOutputCount] = useState(getProfile(state.selectedTool).defaultOutputs);
   const [ratio, setRatio] = useState('1:1');
   const [toolParameters, setToolParameters] = useState<TaskParameters>(defaultToolParameters);
+  const [removeMaskImageUrl, setRemoveMaskImageUrl] = useState('');
   const [referenceAssetId, setReferenceAssetId] = useState(
     state.assets.find((asset) => asset.id === 'asset-scene')?.id ?? state.assets[0]?.id ?? '',
   );
@@ -202,18 +252,29 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
   const [compareOpen, setCompareOpen] = useState(false);
   const [inspectedResultId, setInspectedResultId] = useState<string | null>(null);
   const [exportResultId, setExportResultId] = useState<string | null>(null);
-  const scheduledJobTimers = useRef(new Map<string, number[]>());
+  const [revisionResultId, setRevisionResultId] = useState<string | null>(null);
+  const [revisionPrompt, setRevisionPrompt] = useState('');
+  const falJobControllers = useRef(new Map<string, AbortController>());
+  const falExecutorMounted = useRef(true);
   const toolTriggerRef = useRef<HTMLButtonElement | null>(null);
   const canvasStageRef = useRef<HTMLElement | null>(null);
   const userRevisionRef = useRef(0);
   const pendingFocusRef = useRef<{ nodeIds: string[]; revision: number } | null>(null);
   const completedFocusRef = useRef<{ jobId: string; revision: number } | null>(null);
+  const initialFitCompleteRef = useRef(false);
 
-  useEffect(() => () => {
-    scheduledJobTimers.current.forEach((timeoutIds) => {
-      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
-    });
-    scheduledJobTimers.current.clear();
+  useEffect(() => {
+    falExecutorMounted.current = true;
+    return () => {
+      falExecutorMounted.current = false;
+      queueMicrotask(() => {
+        if (falExecutorMounted.current) return;
+        falJobControllers.current.forEach((controller) => {
+          controller.abort(FAL_LIFECYCLE_ABORT_REASON);
+        });
+        falJobControllers.current.clear();
+      });
+    };
   }, []);
 
   useEffect(() => {
@@ -230,57 +291,157 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     setNodeDialog(null);
   }, [selectedNodeId]);
 
-  const scheduleJob = useCallback((jobId: string, successfulOutputs: number, actualCredits: number) => {
-    if (scheduledJobTimers.current.has(jobId)) return;
-
-    const timeoutIds: number[] = [];
-    const requestRevision = userRevisionRef.current;
-    scheduledJobTimers.current.set(jobId, timeoutIds);
-    timeoutIds.push(window.setTimeout(() => {
-      setState((current) => updateJobProgress(current, jobId, 36));
-    }, 900));
-    timeoutIds.push(window.setTimeout(() => {
-      setState((current) => updateJobProgress(current, jobId, 78));
-    }, 3600));
-    timeoutIds.push(window.setTimeout(() => {
-      setState((current) => updateJobProgress(current, jobId, 94));
-    }, 5400));
-    timeoutIds.push(window.setTimeout(() => {
-      completedFocusRef.current = { jobId, revision: requestRevision };
-      setState((current) => {
-        const job = current.jobs.find((item) => item.id === jobId);
-        if (!job || terminalStatuses.has(job.status)) return current;
-        return completeJob(current, jobId, { successfulOutputs, actualCredits });
-      });
-      scheduledJobTimers.current.delete(jobId);
-    }, 6400));
-  }, [setState]);
-
   useEffect(() => {
     state.jobs.forEach((job) => {
-      if (job.status !== 'queued' && job.status !== 'running') return;
-      scheduleJob(job.id, job.outputCount, job.reservedCredits);
+      if (!executableStatuses.has(job.status)) return;
+      if (falJobControllers.current.has(job.id)) return;
+
+      const scene = state.scenes.find((item) => item.id === job.sceneId);
+      const imageUrl = scene?.imageUrl;
+      if (!imageUrl) {
+        setState((current) => {
+          const currentJob = current.jobs.find((item) => item.id === job.id);
+          return !currentJob || terminalStatuses.has(currentJob.status)
+            ? current
+            : failJob(current, job.id, '无法读取任务输入图片');
+        });
+        return;
+      }
+
+      const referenceUrls = job.inputSnapshot.referenceAssetIds
+        .map((assetId) => state.assets.find((asset) => asset.id === assetId)?.imageUrl)
+        .filter((url): url is string => Boolean(url));
+      const sourceResult = scene?.sourceResultId
+        ? state.results.find((result) => result.id === scene.sourceResultId)
+        : undefined;
+
+      const controller = new AbortController();
+      falJobControllers.current.set(job.id, controller);
+      const executionOptions = {
+        signal: controller.signal,
+        onProgress: (progress: number) => {
+          setState((current) => updateJobProgress(current, job.id, progress));
+        },
+      };
+      const execution = job.externalExecution
+        ? resumeFalImageJob(job.externalExecution, executionOptions)
+        : runFalImageJob({
+            profileId: job.profileId,
+            imageUrls: [imageUrl, ...referenceUrls],
+            prompt: job.inputSnapshot.prompt,
+            ratio: job.inputSnapshot.ratio,
+            outputCount: job.outputCount,
+            parameters: job.inputSnapshot.parameters,
+            ...(job.inputSnapshot.maskImageUrl
+              ? { maskImageUrl: job.inputSnapshot.maskImageUrl }
+              : {}),
+            sourceWidth: sourceResult?.width ?? 512,
+            sourceHeight: sourceResult?.height ?? 512,
+          }, {
+            ...executionOptions,
+            onExecution: ({ requestId, modelId }) => {
+              setState((current) => {
+                const currentJob = current.jobs.find((item) => item.id === job.id);
+                if (!currentJob || terminalStatuses.has(currentJob.status)) return current;
+                return attachExternalJob(current, job.id, {
+                  provider: 'fal',
+                  modelId,
+                  requestId,
+                });
+              });
+            },
+          });
+      void execution.then((result) => {
+        completedFocusRef.current = { jobId: job.id, revision: userRevisionRef.current };
+        setState((current) => {
+          const currentJob = current.jobs.find((item) => item.id === job.id);
+          if (!currentJob || terminalStatuses.has(currentJob.status)) return current;
+          return markJobPostprocessing(current, job.id);
+        });
+        queueMicrotask(() => setState((current) => {
+          const currentJob = current.jobs.find((item) => item.id === job.id);
+          if (!currentJob || terminalStatuses.has(currentJob.status) || currentJob.status === 'cancel_requested') {
+            return current;
+          }
+          const actualCredits = Math.min(
+            currentJob.reservedCredits,
+            result.images.length * getProfile(currentJob.profileId).costPerOutput,
+          );
+          return completeJobWithResults(current, job.id, {
+            images: result.images,
+            actualCredits,
+            ...(result.seed !== undefined ? { seed: result.seed } : {}),
+          });
+        }));
+      }).catch((error: unknown) => {
+        setState((current) => {
+          const currentJob = current.jobs.find((item) => item.id === job.id);
+          if (!currentJob || terminalStatuses.has(currentJob.status)) return current;
+          const errorName = error && typeof error === 'object' && 'name' in error
+            ? String(error.name)
+            : '';
+          if (errorName === 'AbortError') {
+            if (controller.signal.reason === FAL_LIFECYCLE_ABORT_REASON) return current;
+            return cancelJob(current, job.id);
+          }
+          const message = error instanceof Error && error.name !== 'AbortError'
+            ? error.message
+            : `${getProfile(job.profileId).label}任务已取消`;
+          if (/过期|expired|not found|不存在/i.test(message) && currentJob.externalExecution) {
+            return expireJob(current, job.id, '供应商任务已过期，请重新提交');
+          }
+          return failJob(current, job.id, message);
+        });
+      }).finally(() => {
+        falJobControllers.current.delete(job.id);
+      });
     });
-  }, [scheduleJob, state.jobs]);
+  }, [setState, state.assets, state.jobs, state.results, state.scenes]);
 
   const runJob = useCallback((input: RunJobInput) => {
     setState((current) => createJob(current, input));
   }, [setState]);
 
   const handleCancel = useCallback((jobId: string) => {
+    const controller = falJobControllers.current.get(jobId);
     setState((current) => {
       const job = current.jobs.find((item) => item.id === jobId);
-      if (!job || terminalStatuses.has(job.status)) return current;
-      return cancelJob(current, jobId);
+      if (!job || !cancellableStatuses.has(job.status)) return current;
+      return requestJobCancellation(current, jobId);
     });
+    if (controller) {
+      controller.abort();
+      queueMicrotask(() => setState((current) => {
+        const job = current.jobs.find((item) => item.id === jobId);
+        return job?.status === 'cancel_requested' ? cancelJob(current, jobId) : current;
+      }));
+    }
+    else {
+      setState((current) => {
+        const job = current.jobs.find((item) => item.id === jobId);
+        return job?.status === 'cancel_requested' ? cancelJob(current, jobId) : current;
+      });
+    }
   }, [setState]);
 
   const handleRetry = useCallback((job: GenerationJob) => {
+    const retrySnapshot = job.profileId === 'angle'
+      ? {
+          ...job.inputSnapshot,
+          parameters: {
+            ...job.inputSnapshot.parameters,
+            horizontalAngle: clampFalHorizontalAngle(
+              Number(job.inputSnapshot.parameters.horizontalAngle ?? 0),
+            ),
+          },
+        }
+      : job.inputSnapshot;
     runJob({
       sceneId: job.sceneId,
       profileId: job.profileId,
       outputCount: job.outputCount,
-      ...job.inputSnapshot,
+      ...retrySnapshot,
+      retryOfJobId: job.id,
     });
   }, [runJob]);
 
@@ -296,8 +457,29 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
   }, [setState, state.scenes]);
 
   const handleSubmitReview = useCallback((resultId: string) => {
-    setState((current) => submitForReview(current, resultId));
-  }, [setState]);
+    setState((current) => submitForReview(current, resultId, actorId));
+  }, [actorId, setState]);
+
+  const handleWithdrawReview = useCallback((resultId: string) => {
+    setState((current) => withdrawReview(current, resultId, actorId));
+  }, [actorId, setState]);
+
+  const handleRequestRevision = useCallback((resultId: string) => {
+    const result = state.results.find((item) => item.id === resultId);
+    const job = result ? state.jobs.find((item) => item.id === result.jobId) : undefined;
+    if (!result || !job) return;
+    setRevisionResultId(resultId);
+    setRevisionPrompt(job.inputSnapshot.prompt);
+  }, [state.jobs, state.results]);
+
+  const handleConfirmRevision = useCallback(() => {
+    if (!revisionResultId) return;
+    setState((current) => retryResultGeneration(current, revisionResultId, {
+      prompt: revisionPrompt,
+    }));
+    setRevisionResultId(null);
+    setCanvasNotice({ message: '已创建修改版本任务', tone: 'success' });
+  }, [revisionPrompt, revisionResultId, setState]);
 
   const handleToggleFavorite = useCallback((resultId: string) => {
     setState((current) => toggleResultFavorite(current, resultId));
@@ -333,7 +515,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     setCanvasNotice({ message: '不可用原因已记录，不会用于模型训练', tone: 'success' });
   }, [setState]);
 
-  const handleParameterChange = useCallback((key: string, value: string | number) => {
+  const handleParameterChange = useCallback((key: string, value: string | number | boolean) => {
     setToolParameters((current) => ({ ...current, [key]: value }));
   }, []);
 
@@ -416,6 +598,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     setPrompt('');
     setRatio('1:1');
     setToolParameters(defaultToolParameters);
+    setRemoveMaskImageUrl('');
     dispatchInteraction({ type: 'SELECT_DRAFT_TOOL', tool });
   }, []);
 
@@ -427,6 +610,8 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
       onCreateNode: handleCreateNode,
       onDerive: handleDerive,
       onSubmitReview: handleSubmitReview,
+      onWithdrawReview: handleWithdrawReview,
+      onReviseResult: handleRequestRevision,
       onToggleFavorite: handleToggleFavorite,
       onToggleAdoption: handleToggleAdoption,
       onSetPrimary: handleSetPrimary,
@@ -437,29 +622,64 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
       mode: interaction.mode,
       parameters: toolParameters,
       ratio,
+      maskImageUrl: removeMaskImageUrl,
       dropTargetNodeId: dragTargetNodeId,
       compareResultIds,
       draftNode: interaction.draftNode,
       onCancelDraft: cancelDraftNode,
       onParameterChange: handleParameterChange,
+      onMaskChange: setRemoveMaskImageUrl,
     },
-  ), [activeTool, cancelDraftNode, compareResultIds, dragTargetNodeId, handleCreateNode, handleDerive, handleOpenDetails, handleParameterChange, handleSetPrimary, handleSubmitReview, handleToggleAdoption, handleToggleCompare, handleToggleFavorite, interaction.draftNode, interaction.mode, ratio, selectedNodeId, state, toolParameters]);
+  ), [activeTool, cancelDraftNode, compareResultIds, dragTargetNodeId, handleCreateNode, handleDerive, handleOpenDetails, handleParameterChange, handleRequestRevision, handleSetPrimary, handleSubmitReview, handleToggleAdoption, handleToggleCompare, handleToggleFavorite, handleWithdrawReview, interaction.draftNode, interaction.mode, ratio, removeMaskImageUrl, selectedNodeId, state, toolParameters]);
+
+  useEffect(() => {
+    if (initialFitCompleteRef.current || graph.nodes.length === 0) return;
+    const timeoutId = window.setTimeout(() => {
+      initialFitCompleteRef.current = true;
+      void fitView({
+        duration: 220,
+        maxZoom: 1,
+        padding: { top: '36px', right: '28px', bottom: '64px', left: '176px' },
+      });
+    }, 80);
+    return () => window.clearTimeout(timeoutId);
+  }, [fitView, graph.nodes.length]);
 
   const handleToolSelect = (tool: TaskProfileId, trigger: HTMLButtonElement) => {
     markUserGesture();
     toolTriggerRef.current = trigger;
     setState((current) => setSelectedTool(current, tool));
     setOutputCount(getProfile(tool).defaultOutputs);
+    setRemoveMaskImageUrl('');
     dispatchInteraction({ type: 'OPEN_TOOL', tool });
 
     const stageBounds = canvasStageRef.current?.getBoundingClientRect();
     const nodeElement = Array.from(document.querySelectorAll<HTMLElement>('.react-flow__node'))
       .find((element) => element.dataset.id === selectedNodeId);
     const nodeBounds = nodeElement?.getBoundingClientRect();
+    let panelPlacement = interaction.panelPlacement;
     if (stageBounds && nodeBounds) {
+      panelPlacement = choosePanelPlacement(nodeBounds, stageBounds, { width: 336, height: 600 }, 16);
       dispatchInteraction({
         type: 'SET_PANEL_PLACEMENT',
-        placement: choosePanelPlacement(nodeBounds, stageBounds, { width: 336, height: 600 }, 16),
+        placement: panelPlacement,
+      });
+    }
+    if (selectedNodeId) {
+      void fitView({
+        duration: 260,
+        maxZoom: 1,
+        nodes: [{ id: selectedNodeId }],
+        padding: panelPlacement === 'left'
+          ? { top: '64px', right: '24px', bottom: '64px', left: '456px' }
+          : { top: '64px', right: '456px', bottom: '64px', left: '24px' },
+      }).then((didFit) => {
+        if (!didFit) return;
+        const viewport = getViewport();
+        void setViewport({
+          ...viewport,
+          x: viewport.x + (panelPlacement === 'left' ? 140 : -140),
+        }, { duration: 120 });
       });
     }
   };
@@ -655,6 +875,10 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
       revision: userRevisionRef.current,
     };
     dispatchInteraction({ type: 'SUBMIT' });
+    setCanvasNotice({
+      message: `${getProfile(runTool).label}任务已提交，完成后将自动定位结果`,
+      tone: 'success',
+    });
 
     setState((current) => {
       let next = current;
@@ -694,6 +918,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
         prompt,
         ratio,
         parameters: parametersForTool(runTool, toolParameters),
+        maskImageUrl: runTool === 'remove' ? removeMaskImageUrl : undefined,
         referenceAssetIds: runTool === 'blend' && referenceAssetId
           ? [referenceAssetId]
           : [],
@@ -701,7 +926,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
         position: draftPosition,
       });
     });
-  }, [interaction.activeTool, interaction.draftNode, outputCount, prompt, ratio, referenceAssetId, selectedNodeId, setState, state.jobs.length, state.scenes.length, state.selectedTool, toolParameters]);
+  }, [interaction.activeTool, interaction.draftNode, outputCount, prompt, ratio, referenceAssetId, removeMaskImageUrl, selectedNodeId, setState, state.jobs.length, state.scenes.length, state.selectedTool, toolParameters]);
 
   useEffect(() => {
     const request = pendingFocusRef.current;
@@ -723,7 +948,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
     const job = state.jobs.find((item) => item.id === request.jobId);
     if (!job || !terminalStatuses.has(job.status)) return;
     completedFocusRef.current = null;
-    if (job.status !== 'succeeded') return;
+    if (job.status !== 'succeeded' && job.status !== 'partially_succeeded') return;
 
     const resultNodeIds = state.results
       .filter((result) => result.jobId === job.id)
@@ -781,16 +1006,22 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
   return (
     <div className={`workbench ${railCollapsed ? 'is-rail-collapsed' : ''}`}>
       <header aria-label="工作台状态" className="workbench-topbar">
+        <div className="workbench-topbar__brand" aria-label="PIAS 图片工作台">
+          <span><Aperture aria-hidden="true" size={18} /></span>
+          <strong>PIAS</strong>
+          <small>图片工作台</small>
+        </div>
         <div className="workbench-topbar__project">
           <FolderKanban aria-hidden="true" size={16} />
           <span>项目</span>
           <strong title={state.projectName}>{state.projectName}</strong>
         </div>
         <div className="workbench-topbar__status">
-          <span className="is-saved">
-            <CheckCircle2 aria-hidden="true" size={15} />
-            已自动保存
-          </span>
+          <PersistenceStatus
+            onReload={onReloadState}
+            onRetry={onRetrySave}
+            status={saveStatus}
+          />
           <span>
             <Coins aria-hidden="true" size={15} />
             可用点数 <strong>{state.usage.availableCredits}</strong>
@@ -826,6 +1057,7 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
             ariaLabelConfig={reactFlowAriaLabels}
             edges={graph.edges}
             fitView
+            fitViewOptions={{ maxZoom: 1, padding: 0.16 }}
             maxZoom={1.8}
             minZoom={0.3}
             nodes={graph.nodes}
@@ -849,19 +1081,23 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
           onOpenExport={(resultId) => setExportResultId(resultId)}
           onOpenDetails={handleOpenDetails}
           onSubmitReview={handleSubmitReview}
+          onWithdrawReview={handleWithdrawReview}
+          onReviseResult={handleRequestRevision}
           onToggleAdoption={handleToggleAdoption}
           onToggleFavorite={handleToggleFavorite}
           results={state.results}
         />
         <ToolPalette activeTool={activeTool} onSelect={handleToolSelect} />
-        <CanvasCommandBar
-          hasSelectedScene={Boolean(commandScene)}
-          onCreate={handleCreateBlankScene}
-          onDelete={handleRequestDelete}
-          onDuplicate={handleDuplicateScene}
-          onFit={handleFitAll}
-          onRename={handleRequestRename}
-        />
+        {!interaction.panelOpen && (
+          <CanvasCommandBar
+            hasSelectedScene={Boolean(commandScene)}
+            onCreate={handleCreateBlankScene}
+            onDelete={handleRequestDelete}
+            onDuplicate={handleDuplicateScene}
+            onFit={handleFitAll}
+            onRename={handleRequestRename}
+          />
+        )}
         {interaction.mode === 'choosing-node-type' && interaction.draftNode && (
           <NodeTypePicker
             onClose={cancelDraftNode}
@@ -880,13 +1116,16 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
             onClose={handlePanelClose}
             onOutputCountChange={setOutputCount}
             onParameterChange={handleParameterChange}
+            onClearRemoveMask={() => setRemoveMaskImageUrl('')}
             onPromptChange={setPrompt}
             onReferenceAssetChange={setReferenceAssetId}
             onRatioChange={setRatio}
             onRun={handleRunSelected}
             outputCount={outputCount}
+            hasRemoveMask={Boolean(removeMaskImageUrl)}
             parameters={toolParameters}
             placement={interaction.panelPlacement}
+            previewImageUrl={panelPreviewImageUrl}
             prompt={prompt}
             referenceAssetId={referenceAssetId}
             ratio={ratio}
@@ -913,6 +1152,8 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
             onQualityIssue={(issue) => handleQualityIssue(inspectedResult.id, issue)}
             onSetPrimary={() => handleSetPrimary(inspectedResult.id)}
             onSubmitReview={() => handleSubmitReview(inspectedResult.id)}
+            onWithdrawReview={() => handleWithdrawReview(inspectedResult.id)}
+            onReviseResult={() => handleRequestRevision(inspectedResult.id)}
             onToggleAdoption={() => handleToggleAdoption(inspectedResult.id)}
             onToggleFavorite={() => handleToggleFavorite(inspectedResult.id)}
             result={inspectedResult}
@@ -981,6 +1222,37 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
             </footer>
           </section>
         )}
+        {revisionResultId && (
+          <section aria-label="创建修改版本" className="node-command-dialog" role="dialog">
+            <header>
+              <strong>创建修改版本</strong>
+              <small>原结果保留</small>
+            </header>
+            <p>新任务会保留原审核结果、参数快照和结算记录。</p>
+            <label>
+              <span>修改提示词</span>
+              <textarea
+                aria-label="修改提示词"
+                autoFocus
+                maxLength={2000}
+                onChange={(event) => setRevisionPrompt(event.target.value)}
+                rows={5}
+                value={revisionPrompt}
+              />
+            </label>
+            <footer>
+              <button aria-label="取消修改版本" onClick={() => setRevisionResultId(null)} type="button">取消</button>
+              <button
+                aria-label="开始生成修改版本"
+                className="is-primary"
+                onClick={handleConfirmRevision}
+                type="button"
+              >
+                开始生成
+              </button>
+            </footer>
+          </section>
+        )}
         {canvasNotice && (
           <div
             aria-label="画布操作反馈"
@@ -1000,6 +1272,8 @@ function WorkbenchContent({ state, setState }: WorkbenchProps) {
 function MobileResultPreview({
   results,
   onSubmitReview,
+  onWithdrawReview,
+  onReviseResult,
   onOpenDetails,
   onOpenExport,
   onToggleAdoption,
@@ -1007,6 +1281,8 @@ function MobileResultPreview({
 }: {
   results: Result[];
   onSubmitReview: (resultId: string) => void;
+  onWithdrawReview: (resultId: string) => void;
+  onReviseResult: (resultId: string) => void;
   onOpenDetails: (resultId: string) => void;
   onOpenExport: (resultId: string) => void;
   onToggleAdoption: (resultId: string) => void;
@@ -1020,7 +1296,8 @@ function MobileResultPreview({
       </header>
       <div className="mobile-preview__results">
         {results.map((result) => {
-          const canSubmit = result.reviewStatus === 'draft' || result.reviewStatus === 'returned';
+          const canSubmit = result.reviewStatus === 'draft';
+          const canRevise = result.reviewStatus === 'returned' || result.reviewStatus === 'rejected';
           return (
             <article key={result.id}>
               <img alt="" src={result.imageUrl} />
@@ -1049,7 +1326,15 @@ function MobileResultPreview({
                 </button>
                 {canSubmit && (
                   <button aria-label="提交审核" onClick={() => onSubmitReview(result.id)} type="button">
-                    {result.reviewStatus === 'returned' ? '重新提交' : '提交审核'}
+                    提交审核
+                  </button>
+                )}
+                {result.reviewStatus === 'submitted' && (
+                  <button aria-label="撤回审核" onClick={() => onWithdrawReview(result.id)} type="button">撤回</button>
+                )}
+                {canRevise && (
+                  <button aria-label="创建修改版本" onClick={() => onReviseResult(result.id)} type="button">
+                    修改后重试
                   </button>
                 )}
                 {result.reviewStatus === 'approved' && (
@@ -1070,7 +1355,7 @@ function MobileResultPreview({
 function InteractiveJobCanvasNode(props: NodeProps<Node<JobNodeData, 'job'>>) {
   const actions = useContext(JobActionsContext);
   const job = props.data.job;
-  const canCancel = job.status === 'queued' || job.status === 'running';
+  const canCancel = cancellableStatuses.has(job.status);
 
   return (
     <div className="interactive-job-node">
@@ -1081,7 +1366,7 @@ function InteractiveJobCanvasNode(props: NodeProps<Node<JobNodeData, 'job'>>) {
           取消
         </button>
       )}
-      {job.status === 'failed' && (
+      {(job.status === 'failed' || job.status === 'expired') && (
         <button aria-label="重试任务" onClick={() => actions.onRetry(job)} type="button">
           重试
         </button>
@@ -1128,7 +1413,7 @@ function getCreationFallbackPosition(
   const source = parsed.kind === 'scene'
     ? state.scenes.find((scene) => scene.id === parsed.id)
     : state.results.find((result) => result.id === parsed.id);
-  return source ? { x: source.x + 320, y: source.y + 24 } : null;
+  return source ? { x: source.x + 380, y: source.y + 24 } : null;
 }
 
 function canDeleteScene(state: StudioState, sceneId: string): boolean {
@@ -1144,3 +1429,5 @@ function canDeleteScene(state: StudioState, sceneId: string): boolean {
 function getSceneTitleForNotice(scene: Scene): string {
   return scene.title;
 }
+
+export default Workbench;

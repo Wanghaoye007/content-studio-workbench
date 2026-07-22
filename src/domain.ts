@@ -1,5 +1,15 @@
-export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
-export type ReviewStatus = 'draft' | 'submitted' | 'approved' | 'returned';
+export type JobStatus =
+  | 'preflight'
+  | 'queued'
+  | 'running'
+  | 'postprocessing'
+  | 'partially_succeeded'
+  | 'cancel_requested'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled'
+  | 'expired';
+export type ReviewStatus = 'draft' | 'submitted' | 'approved' | 'returned' | 'rejected';
 export type QualityIssue =
   | 'product-deformation'
   | 'text-logo'
@@ -23,7 +33,7 @@ export type ExportSpec = {
 export type CanvasNodeKind = 'scene' | 'job' | 'result';
 export type CanvasPosition = { x: number; y: number };
 export type JobInputKind = 'scene' | 'result';
-export type TaskParameters = Record<string, string | number>;
+export type TaskParameters = Record<string, string | number | boolean>;
 export type TaskProfileId =
   | 'generate' | 'blend' | 'angle' | 'light'
   | 'remove' | 'extract' | 'expand' | 'upscale';
@@ -43,6 +53,18 @@ export type UsageState = {
   availableCredits: number;
   frozenCredits: number;
   spentCredits: number;
+};
+
+export type UsageLedgerEntry = {
+  id: string;
+  jobId: string;
+  profileId: TaskProfileId;
+  entryType: 'reserve' | 'charge' | 'release' | 'adjustment';
+  units: number;
+  balanceAfter: number;
+  pricingRuleVersion: 'pias-credit-v1';
+  reason: string;
+  at: string;
 };
 
 export type Scene = {
@@ -80,7 +102,16 @@ export type GenerationJob = {
   x: number;
   y: number;
   inputSnapshot: JobInputSnapshot;
+  retryOfJobId?: string;
+  supersedesResultId?: string;
+  externalExecution?: ExternalExecution;
   errorMessage?: string;
+};
+
+export type ExternalExecution = {
+  provider: 'fal';
+  modelId: string;
+  requestId: string;
 };
 
 export type JobInputSnapshot = {
@@ -90,6 +121,7 @@ export type JobInputSnapshot = {
   ratio: string;
   parameters: TaskParameters;
   referenceAssetIds: string[];
+  maskImageUrl?: string;
   sourceAssetId?: string;
   sourceAssetVersion?: string;
   sourceResultId?: string;
@@ -108,6 +140,7 @@ export type Result = {
   approvedBy?: string;
   reviewedBy?: string;
   reviewComment?: string;
+  supersedesResultId?: string;
   isFavorite?: boolean;
   isAdopted?: boolean;
   isPrimary?: boolean;
@@ -117,6 +150,12 @@ export type Result = {
   width?: number;
   height?: number;
   createdAt?: string;
+  generationMetadata?: ResultGenerationMetadata;
+};
+
+export type ResultGenerationMetadata = ExternalExecution & {
+  seed?: number;
+  parameters: TaskParameters;
 };
 
 export type ResultManifestEntry = {
@@ -147,6 +186,17 @@ export type AuditEvent = {
   details?: Record<string, string | number | boolean>;
 };
 
+export type StudioNotification = {
+  id: string;
+  type: 'review.submitted' | 'review.approved' | 'review.returned' | 'review.rejected' | 'review.withdrawn';
+  targetId: string;
+  message: string;
+  at: string;
+  recipientUserId?: string;
+  recipientRole?: 'creator' | 'reviewer';
+  readAt?: string;
+};
+
 export type StudioState = {
   tenantName: string;
   projectName: string;
@@ -154,21 +204,35 @@ export type StudioState = {
   selectedSceneId: string;
   selectedTool: TaskProfileId;
   usage: UsageState;
+  usageLedger: UsageLedgerEntry[];
   assets: Asset[];
   scenes: Scene[];
   edges: SceneEdge[];
   jobs: GenerationJob[];
   results: Result[];
   auditEvents: AuditEvent[];
+  notifications: StudioNotification[];
 };
+
+const terminalJobStatuses = new Set<JobStatus>([
+  'partially_succeeded',
+  'succeeded',
+  'failed',
+  'canceled',
+  'expired',
+]);
+
+function isTerminalJobStatus(status: JobStatus): boolean {
+  return terminalJobStatuses.has(status);
+}
 
 export const taskProfiles: TaskProfile[] = [
   { id: 'generate', label: '生成', description: '生成', labelJa: '生成', costPerOutput: 15, defaultOutputs: 4, accent: '#2f6fed' },
   { id: 'blend', label: '融图', description: '融图', labelJa: '融图', costPerOutput: 18, defaultOutputs: 4, accent: '#0b8a74' },
-  { id: 'angle', label: '快速视角', description: '快速视角', labelJa: '快速视角', costPerOutput: 22, defaultOutputs: 4, accent: '#7a5c2e' },
+  { id: 'angle', label: '多角度', description: '多角度', labelJa: '多角度', costPerOutput: 22, defaultOutputs: 4, accent: '#7a5c2e' },
   { id: 'light', label: '定向光', description: '定向光', labelJa: '定向光', costPerOutput: 14, defaultOutputs: 4, accent: '#d58a00' },
-  { id: 'remove', label: '去除', description: '去除', labelJa: '去除', costPerOutput: 12, defaultOutputs: 4, accent: '#bd3f3f' },
-  { id: 'extract', label: '抠图', description: '抠图', labelJa: '抠图', costPerOutput: 12, defaultOutputs: 4, accent: '#39525f' },
+  { id: 'remove', label: '去除', description: '去除', labelJa: '去除', costPerOutput: 12, defaultOutputs: 1, accent: '#bd3f3f' },
+  { id: 'extract', label: '抠图', description: '抠图', labelJa: '抠图', costPerOutput: 12, defaultOutputs: 1, accent: '#39525f' },
   { id: 'expand', label: '扩图', description: '扩图', labelJa: '扩图', costPerOutput: 12, defaultOutputs: 4, accent: '#bd3f3f' },
   { id: 'upscale', label: '超分', description: '超分', labelJa: '超分', costPerOutput: 12, defaultOutputs: 1, accent: '#39525f' },
 ];
@@ -202,6 +266,7 @@ export function initialStudioState(): StudioState {
       frozenCredits: 0,
       spentCredits: 0,
     },
+    usageLedger: [],
     assets: [
       {
         id: 'asset-main',
@@ -250,6 +315,7 @@ export function initialStudioState(): StudioState {
     jobs: [],
     results: [],
     auditEvents: [],
+    notifications: [],
   };
 }
 
@@ -265,8 +331,11 @@ export function createJob(
     ratio?: string;
     parameters?: TaskParameters;
     referenceAssetIds?: string[];
+    maskImageUrl?: string;
     sourceResultId?: string;
     position?: CanvasPosition;
+    retryOfJobId?: string;
+    supersedesResultId?: string;
   },
 ): StudioState {
   if (!Number.isInteger(input.outputCount) || input.outputCount <= 0) {
@@ -296,6 +365,37 @@ export function createJob(
   if (referenceAssetIds.some((assetId) => !state.assets.some((asset) => asset.id === assetId))) {
     throw new Error('参考素材不存在');
   }
+  const retrySource = input.retryOfJobId
+    ? state.jobs.find((job) => job.id === input.retryOfJobId)
+    : undefined;
+  if (input.retryOfJobId && !retrySource) throw new Error('原重试任务不存在');
+  if (retrySource) {
+    if (retrySource.sceneId !== input.sceneId || retrySource.profileId !== input.profileId) {
+      throw new Error('重试任务与原任务归属不一致');
+    }
+    const reviewRevision = input.supersedesResultId
+      ? state.results.find((result) => result.id === input.supersedesResultId)
+      : undefined;
+    if (input.supersedesResultId && (
+      !reviewRevision
+      || reviewRevision.jobId !== retrySource.id
+      || (reviewRevision.reviewStatus !== 'returned' && reviewRevision.reviewStatus !== 'rejected')
+    )) {
+      throw new Error('审核修改版本与原结果不一致');
+    }
+    if (!input.supersedesResultId && retrySource.status !== 'failed' && retrySource.status !== 'expired') {
+      throw new Error('仅失败或过期任务可直接重试');
+    }
+    if (state.jobs.some((job) => (
+      job.retryOfJobId === retrySource.id
+      && job.supersedesResultId === input.supersedesResultId
+      && !isTerminalJobStatus(job.status)
+    ))) {
+      throw new Error('已有进行中的重试任务');
+    }
+  } else if (input.supersedesResultId) {
+    throw new Error('审核修改版本必须关联原任务');
+  }
   const reservedCredits = profile.costPerOutput * input.outputCount;
   if (state.usage.availableCredits < reservedCredits) {
     throw new Error('可用额度不足');
@@ -307,13 +407,13 @@ export function createJob(
     id: `job-${state.jobs.length + 1}`,
     sceneId: input.sceneId,
     profileId: input.profileId,
-    status: 'queued',
+    status: 'preflight',
     outputCount: input.outputCount,
     reservedCredits,
     actualCredits: 0,
-    progress: 8,
-    x: input.position?.x ?? source.x + 320,
-    y: input.position?.y ?? source.y + 24 + (sceneJobCount + sceneBranchCount) * 300,
+    progress: 4,
+    x: input.position?.x ?? source.x + 380,
+    y: input.position?.y ?? source.y + 24 + (sceneJobCount + sceneBranchCount) * 360,
     inputSnapshot: {
       inputKind,
       inputNodeId,
@@ -321,10 +421,13 @@ export function createJob(
       ratio: input.ratio ?? '1:1',
       parameters: { ...(input.parameters ?? {}) },
       referenceAssetIds,
+      ...(input.maskImageUrl ? { maskImageUrl: input.maskImageUrl } : {}),
       ...(source.sourceAssetId ? { sourceAssetId: source.sourceAssetId } : {}),
       ...(source.sourceAssetVersion ? { sourceAssetVersion: source.sourceAssetVersion } : {}),
       ...(input.sourceResultId ? { sourceResultId: input.sourceResultId } : {}),
     },
+    ...(input.retryOfJobId ? { retryOfJobId: input.retryOfJobId } : {}),
+    ...(input.supersedesResultId ? { supersedesResultId: input.supersedesResultId } : {}),
   };
   const jobs = [...state.jobs, job];
 
@@ -337,9 +440,19 @@ export function createJob(
       availableCredits: state.usage.availableCredits - reservedCredits,
       frozenCredits: state.usage.frozenCredits + reservedCredits,
     },
+    usageLedger: [
+      ...(state.usageLedger ?? []),
+      usageLedgerEntry(state, job, 'reserve', reservedCredits, {
+        balanceAfter: state.usage.availableCredits - reservedCredits,
+        reason: '任务提交冻结预计额度',
+      }),
+    ],
     auditEvents: [
       ...state.auditEvents,
-      audit('job.created', job.id, 'Mika Tanaka'),
+      audit('job.created', job.id, 'Mika Tanaka', {
+        ...(job.retryOfJobId ? { retryOfJobId: job.retryOfJobId } : {}),
+        ...(job.supersedesResultId ? { supersedesResultId: job.supersedesResultId } : {}),
+      }),
     ],
   };
 }
@@ -359,21 +472,33 @@ export function moveCanvasItem(
 function settleJob(
   state: StudioState,
   jobId: string,
-  status: 'failed' | 'canceled',
+  status: 'failed' | 'canceled' | 'expired',
   errorMessage?: string,
+  actualCredits = 0,
 ): StudioState {
   const job = state.jobs.find((item) => item.id === jobId);
   if (!job) {
     throw new Error(`任务不存在：${jobId}`);
   }
-  if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'canceled') {
+  if (isTerminalJobStatus(job.status)) {
     throw new Error('任务已结算，不能重复结算');
+  }
+  if (!Number.isFinite(actualCredits) || actualCredits < 0 || actualCredits > job.reservedCredits) {
+    throw new Error('实际额度超出预留范围');
   }
 
   const jobs = state.jobs.map((item) =>
     item.id === jobId
-      ? { ...item, status, ...(errorMessage !== undefined ? { errorMessage } : {}) }
+      ? { ...item, status, actualCredits, ...(errorMessage !== undefined ? { errorMessage } : {}) }
       : item,
+  );
+  const balanceAfter = state.usage.availableCredits + job.reservedCredits - actualCredits;
+  const settlementLedger = settlementLedgerEntries(
+    state,
+    job,
+    actualCredits,
+    balanceAfter,
+    `任务${status}结算`,
   );
 
   return {
@@ -382,9 +507,11 @@ function settleJob(
     scenes: refreshSceneStatuses(state.scenes, jobs),
     usage: {
       ...state.usage,
-      availableCredits: state.usage.availableCredits + job.reservedCredits,
+      availableCredits: state.usage.availableCredits + job.reservedCredits - actualCredits,
       frozenCredits: Math.max(0, state.usage.frozenCredits - job.reservedCredits),
+      spentCredits: state.usage.spentCredits + actualCredits,
     },
+    usageLedger: [...(state.usageLedger ?? []), ...settlementLedger],
     auditEvents: [
       ...state.auditEvents,
       audit(`job.${status}`, job.id, '图像处理服务'),
@@ -392,12 +519,72 @@ function settleJob(
   };
 }
 
-export function failJob(state: StudioState, jobId: string, errorMessage: string): StudioState {
-  return settleJob(state, jobId, 'failed', errorMessage);
+export function failJob(
+  state: StudioState,
+  jobId: string,
+  errorMessage: string,
+  actualCredits = 0,
+): StudioState {
+  return settleJob(state, jobId, 'failed', errorMessage, actualCredits);
 }
 
-export function cancelJob(state: StudioState, jobId: string): StudioState {
-  return settleJob(state, jobId, 'canceled');
+export function cancelJob(state: StudioState, jobId: string, actualCredits = 0): StudioState {
+  return settleJob(state, jobId, 'canceled', undefined, actualCredits);
+}
+
+export function expireJob(
+  state: StudioState,
+  jobId: string,
+  errorMessage = '供应商任务已过期',
+  actualCredits = 0,
+): StudioState {
+  return settleJob(state, jobId, 'expired', errorMessage, actualCredits);
+}
+
+export function requestJobCancellation(state: StudioState, jobId: string): StudioState {
+  const job = state.jobs.find((item) => item.id === jobId);
+  if (!job) throw new Error(`任务不存在：${jobId}`);
+  if (isTerminalJobStatus(job.status)) throw new Error('任务已结算，不能取消');
+  if (job.status === 'cancel_requested') return state;
+
+  const jobs = state.jobs.map((item) => item.id === jobId
+    ? { ...item, status: 'cancel_requested' as const }
+    : item);
+  return {
+    ...state,
+    jobs,
+    scenes: refreshSceneStatuses(state.scenes, jobs),
+    auditEvents: [...state.auditEvents, audit('job.cancel_requested', job.id, 'Mika Tanaka')],
+  };
+}
+
+export function addAsset(state: StudioState, input: Omit<Asset, 'id'>): StudioState {
+  const asset = {
+    ...input,
+    brand: input.brand.trim(),
+    product: input.product.trim(),
+    skuCode: input.skuCode.trim(),
+    usage: input.usage.trim(),
+    version: input.version.trim(),
+    imageUrl: input.imageUrl.trim(),
+  };
+  const requiredFields = [asset.brand, asset.product, asset.skuCode, asset.usage, asset.version, asset.imageUrl];
+  if (requiredFields.some((value) => !value)) {
+    throw new Error('素材信息不完整');
+  }
+  if (state.assets.some((item) => item.skuCode.toLocaleLowerCase() === asset.skuCode.toLocaleLowerCase())) {
+    throw new Error(`SKU 编码已存在：${asset.skuCode}`);
+  }
+
+  const id = getNextAssetId(state);
+  return {
+    ...state,
+    assets: [...state.assets, { id, ...asset }],
+    auditEvents: [...state.auditEvents, audit('asset.uploaded', id, 'Mika Tanaka', {
+      skuCode: asset.skuCode,
+      version: asset.version,
+    })],
+  };
 }
 
 export function createSceneFromAsset(
@@ -527,12 +714,14 @@ export function deleteScene(state: StudioState, sceneId: string): StudioState {
 
 export function updateJobProgress(state: StudioState, jobId: string, progress: number): StudioState {
   const job = state.jobs.find((item) => item.id === jobId);
-  if (!job || job.status === 'succeeded' || job.status === 'failed' || job.status === 'canceled') {
+  if (!job || isTerminalJobStatus(job.status) || job.status === 'cancel_requested' || job.status === 'postprocessing') {
     return state;
   }
 
+  const boundedProgress = Math.max(0, Math.min(94, progress));
+
   const jobs = state.jobs.map((item) =>
-    item.id === jobId ? { ...item, status: progress >= 100 ? item.status : 'running', progress } : item,
+    item.id === jobId ? { ...item, status: 'running' as const, progress: boundedProgress } : item,
   );
 
   return {
@@ -542,29 +731,64 @@ export function updateJobProgress(state: StudioState, jobId: string, progress: n
   };
 }
 
-export function completeJob(
+export function markJobPostprocessing(state: StudioState, jobId: string): StudioState {
+  const job = state.jobs.find((item) => item.id === jobId);
+  if (!job || isTerminalJobStatus(job.status) || job.status === 'cancel_requested') return state;
+  const jobs = state.jobs.map((item) => item.id === jobId
+    ? { ...item, status: 'postprocessing' as const, progress: Math.max(96, item.progress) }
+    : item);
+  return { ...state, jobs, scenes: refreshSceneStatuses(state.scenes, jobs) };
+}
+
+export function attachExternalJob(
   state: StudioState,
   jobId: string,
-  input: { successfulOutputs: number; actualCredits: number },
+  externalExecution: ExternalExecution,
 ): StudioState {
   const job = state.jobs.find((item) => item.id === jobId);
-  if (!job) {
-    throw new Error(`任务不存在：${jobId}`);
+  if (!job) throw new Error(`任务不存在：${jobId}`);
+  if (isTerminalJobStatus(job.status)) {
+    throw new Error('任务已结算，不能挂载外部请求');
   }
-  if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'canceled') {
-    throw new Error('任务已结算，不能重复结算');
-  }
-  if (!Number.isInteger(input.successfulOutputs) || input.successfulOutputs < 0 || input.successfulOutputs > job.outputCount) {
-    throw new Error('成功产出数量超出任务范围');
-  }
-  if (!Number.isFinite(input.actualCredits) || input.actualCredits < 0 || input.actualCredits > job.reservedCredits) {
-    throw new Error('实际额度超出预留范围');
-  }
-  if (input.successfulOutputs === 0) {
-    return failJob(state, jobId, '任务未生成可用结果');
+  if (!externalExecution.modelId.trim()) throw new Error('外部模型 ID 不能为空');
+  if (!externalExecution.requestId.trim()) throw new Error('外部请求 ID 不能为空');
+  if (job.externalExecution) {
+    if (
+      job.externalExecution.provider === externalExecution.provider
+      && job.externalExecution.modelId === externalExecution.modelId
+      && job.externalExecution.requestId === externalExecution.requestId
+    ) return state;
+    throw new Error('任务已挂载其他外部请求');
   }
 
-  const newResults = Array.from({ length: input.successfulOutputs }).map((_, index) => {
+  const jobs = state.jobs.map((item) => item.id === jobId
+    ? {
+        ...item,
+        status: 'queued' as const,
+        progress: Math.max(24, item.progress),
+        externalExecution: { ...externalExecution },
+      }
+    : item);
+  return { ...state, jobs, scenes: refreshSceneStatuses(state.scenes, jobs) };
+}
+
+type SuccessfulResultInput = {
+  imageUrl: string;
+  width: number;
+  height: number;
+  generationMetadata?: ResultGenerationMetadata;
+};
+
+function settleSuccessfulJob(
+  state: StudioState,
+  job: GenerationJob,
+  actualCredits: number,
+  outputs: SuccessfulResultInput[],
+): StudioState {
+  const completionStatus: 'partially_succeeded' | 'succeeded' = outputs.length < job.outputCount
+    ? 'partially_succeeded'
+    : 'succeeded';
+  const newResults: Result[] = outputs.map((output, index) => {
     const id = `result-${state.results.length + index + 1}`;
     return {
       id,
@@ -572,22 +796,26 @@ export function completeJob(
       jobId: job.id,
       assetId: `generated-${id}`,
       title: `${getProfile(job.profileId).label} ${index + 1}`,
-      imageUrl: resultImages[(state.results.length + index) % resultImages.length],
-      reviewStatus: 'draft' as ReviewStatus,
+      imageUrl: output.imageUrl,
+      reviewStatus: 'draft',
+      ...(job.supersedesResultId ? { supersedesResultId: job.supersedesResultId } : {}),
       isFavorite: false,
       isAdopted: false,
       isPrimary: false,
-      width: 2048,
-      height: 2048,
+      width: output.width,
+      height: output.height,
       createdAt: new Date().toISOString(),
-      x: job.x + 280 + index * 220,
+      x: job.x + 380 + index * 300,
       y: job.y,
+      ...(output.generationMetadata
+        ? { generationMetadata: output.generationMetadata }
+        : {}),
     };
   });
 
   const jobs = state.jobs.map((item) =>
-    item.id === jobId
-      ? { ...item, status: 'succeeded' as const, progress: 100, actualCredits: input.actualCredits }
+    item.id === job.id
+      ? { ...item, status: completionStatus, progress: 100, actualCredits }
       : item,
   );
   const scenes = refreshSceneStatuses(
@@ -598,6 +826,14 @@ export function completeJob(
     ),
     jobs,
   );
+  const externalDetails = job.externalExecution
+    ? {
+        provider: job.externalExecution.provider,
+        modelId: job.externalExecution.modelId,
+        requestId: job.externalExecution.requestId,
+      }
+    : undefined;
+  const balanceAfter = state.usage.availableCredits + job.reservedCredits - actualCredits;
 
   return {
     ...state,
@@ -606,15 +842,134 @@ export function completeJob(
     results: [...state.results, ...newResults],
     usage: {
       ...state.usage,
-      availableCredits: state.usage.availableCredits + job.reservedCredits - input.actualCredits,
+      availableCredits: state.usage.availableCredits + job.reservedCredits - actualCredits,
       frozenCredits: Math.max(0, state.usage.frozenCredits - job.reservedCredits),
-      spentCredits: state.usage.spentCredits + input.actualCredits,
+      spentCredits: state.usage.spentCredits + actualCredits,
     },
+    usageLedger: [
+      ...(state.usageLedger ?? []),
+      ...settlementLedgerEntries(state, job, actualCredits, balanceAfter, '任务结果结算'),
+    ],
     auditEvents: [
       ...state.auditEvents,
-      audit('job.succeeded', job.id, '图像处理服务'),
+      audit(`job.${completionStatus}`, job.id, '图像处理服务', externalDetails),
     ],
   };
+}
+
+function usageLedgerEntry(
+  state: StudioState,
+  job: GenerationJob,
+  entryType: UsageLedgerEntry['entryType'],
+  units: number,
+  options: { balanceAfter: number; reason: string; offset?: number },
+): UsageLedgerEntry {
+  return {
+    id: `usage-${(state.usageLedger?.length ?? 0) + 1 + (options.offset ?? 0)}`,
+    jobId: job.id,
+    profileId: job.profileId,
+    entryType,
+    units,
+    balanceAfter: options.balanceAfter,
+    pricingRuleVersion: 'pias-credit-v1',
+    reason: options.reason,
+    at: new Date().toISOString(),
+  };
+}
+
+function settlementLedgerEntries(
+  state: StudioState,
+  job: GenerationJob,
+  actualCredits: number,
+  balanceAfter: number,
+  reason: string,
+): UsageLedgerEntry[] {
+  return [
+    usageLedgerEntry(state, job, 'charge', actualCredits, {
+      balanceAfter: state.usage.availableCredits,
+      reason,
+    }),
+    usageLedgerEntry(state, job, 'release', job.reservedCredits - actualCredits, {
+      balanceAfter,
+      reason: '释放未结算的冻结额度',
+      offset: 1,
+    }),
+  ];
+}
+
+function getCompletableJob(
+  state: StudioState,
+  jobId: string,
+  successfulOutputs: number,
+  actualCredits: number,
+): GenerationJob {
+  const job = state.jobs.find((item) => item.id === jobId);
+  if (!job) throw new Error(`任务不存在：${jobId}`);
+  if (isTerminalJobStatus(job.status)) {
+    throw new Error('任务已结算，不能重复结算');
+  }
+  if (!Number.isInteger(successfulOutputs) || successfulOutputs < 0 || successfulOutputs > job.outputCount) {
+    throw new Error('成功产出数量超出任务范围');
+  }
+  if (!Number.isFinite(actualCredits) || actualCredits < 0 || actualCredits > job.reservedCredits) {
+    throw new Error('实际额度超出预留范围');
+  }
+  return job;
+}
+
+export function completeJobWithResults(
+  state: StudioState,
+  jobId: string,
+  input: {
+    images: Array<{ url: string; width?: number; height?: number }>;
+    actualCredits: number;
+    seed?: number;
+  },
+): StudioState {
+  if (input.images.length === 0 || input.images.some((image) => !image.url.trim())) {
+    throw new Error('任务未生成可用结果');
+  }
+  const job = getCompletableJob(state, jobId, input.images.length, input.actualCredits);
+  if (!job.externalExecution) throw new Error('任务缺少外部请求信息');
+
+  const generationMetadata: ResultGenerationMetadata = {
+    ...job.externalExecution,
+    ...(input.seed !== undefined ? { seed: input.seed } : {}),
+    parameters: { ...job.inputSnapshot.parameters },
+  };
+  return settleSuccessfulJob(
+    state,
+    job,
+    input.actualCredits,
+    input.images.map((image) => ({
+      imageUrl: image.url.trim(),
+      width: image.width && image.width > 0 ? image.width : 1024,
+      height: image.height && image.height > 0 ? image.height : 1024,
+      generationMetadata: { ...generationMetadata, parameters: { ...generationMetadata.parameters } },
+    })),
+  );
+}
+
+export function completeJob(
+  state: StudioState,
+  jobId: string,
+  input: { successfulOutputs: number; actualCredits: number },
+): StudioState {
+  const job = getCompletableJob(state, jobId, input.successfulOutputs, input.actualCredits);
+  if (input.successfulOutputs === 0) {
+    return failJob(state, jobId, '任务未生成可用结果', input.actualCredits);
+  }
+
+  return settleSuccessfulJob(
+    state,
+    job,
+    input.actualCredits,
+    Array.from({ length: input.successfulOutputs }).map((_, index) => ({
+      imageUrl: resultImages[(state.results.length + index) % resultImages.length],
+      width: 2048,
+      height: 2048,
+    })),
+  );
 }
 
 export function createDerivedScene(
@@ -646,7 +1001,7 @@ export function createDerivedScene(
     operation: input.operation,
     status: 'draft',
     x: sourceResult.x,
-    y: parent.y + 24 + (parentJobCount + parentBranchCount) * 300,
+    y: parent.y + 24 + (parentJobCount + parentBranchCount) * 360,
     imageUrl: sourceResult.imageUrl,
     resultIds: [],
     parentSceneId: parent.id,
@@ -675,15 +1030,23 @@ export function createDerivedScene(
   };
 }
 
-export function submitForReview(state: StudioState, resultId: string): StudioState {
+export function submitForReview(
+  state: StudioState,
+  resultId: string,
+  actor = 'Mika Tanaka',
+): StudioState {
   const result = state.results.find((item) => item.id === resultId);
   if (!result) {
     throw new Error(`结果不存在：${resultId}`);
   }
-  if (result.reviewStatus !== 'draft' && result.reviewStatus !== 'returned') {
-    throw new Error('仅草稿或已退回结果可提交审核');
+  if (result.reviewStatus === 'returned' || result.reviewStatus === 'rejected') {
+    throw new Error('已退回或已拒绝结果必须生成新版本后提交审核');
+  }
+  if (result.reviewStatus !== 'draft') {
+    throw new Error('仅草稿结果可提交审核');
   }
 
+  const event = audit('review.submitted', resultId, actor);
   return {
     ...state,
     results: state.results.map((result) =>
@@ -691,7 +1054,13 @@ export function submitForReview(state: StudioState, resultId: string): StudioSta
         ? { ...result, reviewStatus: 'submitted', reviewedBy: undefined, reviewComment: undefined }
         : result,
     ),
-    auditEvents: [...state.auditEvents, audit('review.submitted', resultId, 'Mika Tanaka')],
+    auditEvents: [...state.auditEvents, event],
+    notifications: [...(state.notifications ?? []), reviewNotification(
+      state,
+      event,
+      '新结果已提交审核',
+      { recipientRole: 'reviewer' },
+    )],
   };
 }
 
@@ -704,6 +1073,7 @@ export function approveResult(state: StudioState, resultId: string, reviewer: st
     throw new Error('仅已提交结果可审批');
   }
 
+  const event = audit('review.approved', resultId, reviewer);
   return {
     ...state,
     results: state.results.map((result) =>
@@ -711,7 +1081,13 @@ export function approveResult(state: StudioState, resultId: string, reviewer: st
         ? { ...result, reviewStatus: 'approved', approvedBy: reviewer, reviewedBy: reviewer }
         : result,
     ),
-    auditEvents: [...state.auditEvents, audit('review.approved', resultId, reviewer)],
+    auditEvents: [...state.auditEvents, event],
+    notifications: [...(state.notifications ?? []), reviewNotification(
+      state,
+      event,
+      '审核已通过',
+      { recipientUserId: latestReviewSubmitter(state, resultId) },
+    )],
   };
 }
 
@@ -728,18 +1104,150 @@ export function returnResult(
   if (result.reviewStatus !== 'submitted') {
     throw new Error('仅待审核结果可退回');
   }
-  if (!reason.trim()) {
-    throw new Error('退回原因不能为空');
-  }
+  const normalizedReason = reviewReason(reason);
 
+  const event = audit('review.returned', resultId, reviewer);
   return {
     ...state,
     results: state.results.map((item) =>
       item.id === resultId
-        ? { ...item, reviewStatus: 'returned', reviewedBy: reviewer, reviewComment: reason.trim() }
+        ? { ...item, reviewStatus: 'returned', approvedBy: undefined, reviewedBy: reviewer, reviewComment: normalizedReason }
         : item,
     ),
-    auditEvents: [...state.auditEvents, audit('review.returned', resultId, reviewer)],
+    auditEvents: [...state.auditEvents, event],
+    notifications: [...(state.notifications ?? []), reviewNotification(
+      state,
+      event,
+      `审核已退回：${normalizedReason}`,
+      { recipientUserId: latestReviewSubmitter(state, resultId) },
+    )],
+  };
+}
+
+export function rejectResult(
+  state: StudioState,
+  resultId: string,
+  reviewer: string,
+  reason: string,
+): StudioState {
+  const result = findResult(state, resultId);
+  if (result.reviewStatus !== 'submitted') throw new Error('仅待审核结果可拒绝');
+  const normalizedReason = reviewReason(reason);
+  const event = audit('review.rejected', resultId, reviewer);
+  return {
+    ...state,
+    results: state.results.map((item) => item.id === resultId
+      ? {
+          ...item,
+          reviewStatus: 'rejected',
+          approvedBy: undefined,
+          reviewedBy: reviewer,
+          reviewComment: normalizedReason,
+        }
+      : item),
+    auditEvents: [...state.auditEvents, event],
+    notifications: [...(state.notifications ?? []), reviewNotification(
+      state,
+      event,
+      `审核已拒绝：${normalizedReason}`,
+      { recipientUserId: latestReviewSubmitter(state, resultId) },
+    )],
+  };
+}
+
+export function withdrawReview(
+  state: StudioState,
+  resultId: string,
+  actor: string,
+): StudioState {
+  const result = findResult(state, resultId);
+  if (result.reviewStatus !== 'submitted') throw new Error('仅待审核申请可撤回');
+  const event = audit('review.withdrawn', resultId, actor);
+  return {
+    ...state,
+    results: state.results.map((item) => item.id === resultId
+      ? {
+          ...item,
+          reviewStatus: 'draft',
+          approvedBy: undefined,
+          reviewedBy: undefined,
+          reviewComment: undefined,
+        }
+      : item),
+    auditEvents: [...state.auditEvents, event],
+    notifications: [...(state.notifications ?? []), reviewNotification(
+      state,
+      event,
+      '审核申请已撤回',
+      { recipientRole: 'reviewer' },
+    )],
+  };
+}
+
+export function retryResultGeneration(
+  state: StudioState,
+  resultId: string,
+  overrides: {
+    prompt?: string;
+    ratio?: string;
+    parameters?: TaskParameters;
+    referenceAssetIds?: string[];
+    maskImageUrl?: string;
+  } = {},
+): StudioState {
+  const result = findResult(state, resultId);
+  if (result.reviewStatus !== 'returned' && result.reviewStatus !== 'rejected') {
+    throw new Error('仅已退回或已拒绝结果可修改后重试');
+  }
+  const sourceJob = state.jobs.find((job) => job.id === result.jobId);
+  if (!sourceJob) throw new Error('原生成任务不存在');
+  const snapshot = sourceJob.inputSnapshot;
+  return createJob(state, {
+    sceneId: sourceJob.sceneId,
+    profileId: sourceJob.profileId,
+    outputCount: sourceJob.outputCount,
+    inputKind: snapshot.inputKind,
+    inputNodeId: snapshot.inputNodeId,
+    prompt: overrides.prompt ?? snapshot.prompt,
+    ratio: overrides.ratio ?? snapshot.ratio,
+    parameters: { ...snapshot.parameters, ...(overrides.parameters ?? {}) },
+    referenceAssetIds: overrides.referenceAssetIds ?? snapshot.referenceAssetIds,
+    maskImageUrl: overrides.maskImageUrl ?? snapshot.maskImageUrl,
+    sourceResultId: snapshot.sourceResultId,
+    retryOfJobId: sourceJob.id,
+    supersedesResultId: result.id,
+  });
+}
+
+function reviewReason(reason: string): string {
+  const normalized = reason.trim();
+  if (normalized.length < 5 || normalized.length > 500) {
+    throw new Error('审核原因必须为 5-500 个字符');
+  }
+  return normalized;
+}
+
+function latestReviewSubmitter(state: StudioState, resultId: string): string {
+  for (let index = state.auditEvents.length - 1; index >= 0; index -= 1) {
+    const event = state.auditEvents[index];
+    if (event.type === 'review.submitted' && event.targetId === resultId) return event.actor;
+  }
+  return 'Mika Tanaka';
+}
+
+function reviewNotification(
+  state: StudioState,
+  event: AuditEvent,
+  message: string,
+  recipient: Pick<StudioNotification, 'recipientUserId' | 'recipientRole'>,
+): StudioNotification {
+  return {
+    id: `notification-${(state.notifications ?? []).length + 1}`,
+    type: event.type as StudioNotification['type'],
+    targetId: event.targetId,
+    message,
+    at: event.at,
+    ...recipient,
   };
 }
 
@@ -903,8 +1411,11 @@ function refreshSceneStatuses(scenes: Scene[], jobs: GenerationJob[]): Scene[] {
   return scenes.map((scene) => {
     const sceneJobs = jobs.filter((job) => job.sceneId === scene.id);
     if (sceneJobs.length === 0) return scene;
-    if (sceneJobs.some((job) => job.status === 'running')) return { ...scene, status: 'running' };
-    if (sceneJobs.some((job) => job.status === 'queued')) return { ...scene, status: 'queued' };
+    const activePriority: JobStatus[] = [
+      'postprocessing', 'running', 'queued', 'preflight', 'cancel_requested',
+    ];
+    const activeStatus = activePriority.find((status) => sceneJobs.some((job) => job.status === status));
+    if (activeStatus) return { ...scene, status: activeStatus };
     return { ...scene, status: sceneJobs.at(-1)!.status };
   });
 }
@@ -940,6 +1451,16 @@ function audit(
     at: new Date().toISOString(),
     ...(details ? { details } : {}),
   };
+}
+
+function getNextAssetId(state: StudioState): string {
+  const usedIds = new Set([
+    ...state.assets.map((asset) => asset.id),
+    ...state.auditEvents.map((event) => event.targetId),
+  ]);
+  let index = state.assets.length + 1;
+  while (usedIds.has(`asset-upload-${index}`)) index += 1;
+  return `asset-upload-${index}`;
 }
 
 export function getNextSceneId(state: StudioState): string {

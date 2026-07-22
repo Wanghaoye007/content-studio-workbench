@@ -13,7 +13,8 @@ const operationLabels: Record<string, string> = {
   Generate: '生成',
   Blend: '融图',
   'Directional Light': '定向光',
-  'Quick Angle': '快速视角',
+  'Quick Angle': '多角度',
+  '快速视角': '多角度',
   Expand: '扩图',
   Upscale: '超分',
   Remove: '去除',
@@ -23,7 +24,7 @@ const knownChineseOperations = new Set([
   '生成',
   '融图',
   '定向光',
-  '快速视角',
+  '多角度',
   '扩图',
   '超分',
   '去除',
@@ -47,6 +48,8 @@ export function getSceneTitle(scene: Pick<Scene, 'operation' | 'title'>): string
 export type CanvasNodeActions = {
   onDerive?: (result: Result) => void;
   onSubmitReview?: (resultId: string) => void;
+  onWithdrawReview?: (resultId: string) => void;
+  onReviseResult?: (resultId: string) => void;
   onCreateNode?: (sourceNodeId: string) => void;
   onToggleFavorite?: (resultId: string) => void;
   onToggleAdoption?: (resultId: string) => void;
@@ -65,7 +68,9 @@ export type SceneNodeData = {
   interactionMode?: InteractionMode;
   parameters?: TaskParameters;
   ratio?: string;
-  onParameterChange?: (key: string, value: string | number) => void;
+  maskImageUrl?: string;
+  onMaskChange?: (maskImageUrl: string) => void;
+  onParameterChange?: (key: string, value: string | number | boolean) => void;
 };
 
 export type JobNodeData = {
@@ -85,7 +90,9 @@ export type ResultNodeData = {
   interactionMode?: InteractionMode;
   parameters?: TaskParameters;
   ratio?: string;
-  onParameterChange?: (key: string, value: string | number) => void;
+  maskImageUrl?: string;
+  onMaskChange?: (maskImageUrl: string) => void;
+  onParameterChange?: (key: string, value: string | number | boolean) => void;
 };
 
 export type DraftTaskNodeData = {
@@ -99,11 +106,13 @@ export type CanvasGraphInteraction = {
   mode: InteractionMode;
   parameters: TaskParameters;
   ratio: string;
+  maskImageUrl?: string;
   dropTargetNodeId?: string;
   compareResultIds?: string[];
   draftNode?: DraftNodeCreation | null;
   onCancelDraft?: () => void;
-  onParameterChange: (key: string, value: string | number) => void;
+  onParameterChange: (key: string, value: string | number | boolean) => void;
+  onMaskChange?: (maskImageUrl: string) => void;
 };
 
 export type CanvasGraph = {
@@ -138,7 +147,9 @@ export function buildCanvasGraph(
         interactionMode: interaction.mode,
         parameters: interaction.parameters,
         ratio: interaction.ratio,
+        maskImageUrl: interaction.maskImageUrl,
         onParameterChange: interaction.onParameterChange,
+        onMaskChange: interaction.onMaskChange,
       } : {}),
     },
   }));
@@ -170,7 +181,9 @@ export function buildCanvasGraph(
         interactionMode: interaction.mode,
         parameters: interaction.parameters,
         ratio: interaction.ratio,
+        maskImageUrl: interaction.maskImageUrl,
         onParameterChange: interaction.onParameterChange,
+        onMaskChange: interaction.onMaskChange,
       } : {}),
     },
   }));
@@ -211,9 +224,13 @@ function buildEdges(state: StudioState): Edge[] {
     id: `scene-job:${job.id}`,
     source: `scene:${job.sceneId}`,
     target: `job:${job.id}`,
-    animated: job.status === 'queued' || job.status === 'running',
+    animated: job.status === 'preflight'
+      || job.status === 'queued'
+      || job.status === 'running'
+      || job.status === 'postprocessing'
+      || job.status === 'cancel_requested',
     className: `lineage-edge is-${job.status}`,
-    ...(job.status === 'failed' || job.status === 'canceled'
+    ...(job.status === 'failed' || job.status === 'canceled' || job.status === 'expired'
       ? { style: { strokeDasharray: '6 4' } }
       : {}),
   }));
