@@ -81,6 +81,13 @@ try {
   log('upload-to-canvas');
   await page.getByRole('button', { name: '上传图片素材' }).click();
   const uploadDialog = page.getByRole('dialog', { name: '上传素材' });
+  await assertOrdinaryDialogGeometry(uploadDialog, '上传素材');
+  if (captureEvidence) {
+    await page.screenshot({
+      path: join(evidenceDirectory, 'image-mvp-modal-upload-desktop-2026-07-23.png'),
+      fullPage: true,
+    });
+  }
   await uploadDialog.getByLabel('商品名称').fill('E2E 商品图');
   await uploadDialog.getByLabel('SKU 编码').fill('E2E-SKU-001');
   await uploadDialog.getByLabel('素材图片').setInputFiles({
@@ -91,6 +98,9 @@ try {
   await uploadDialog.getByRole('button', { name: '确认上传并添加到画布' }).click();
   await page.getByRole('status', { name: '画布操作反馈' })
     .filter({ hasText: '已上传并添加到画布' }).waitFor();
+
+  log('tool-panel-geometry');
+  await exerciseToolPanelMatrix(page);
 
   log('submit-first-job');
   await page.getByRole('button', { name: '生成' }).click();
@@ -127,7 +137,7 @@ try {
   });
   if (captureEvidence) {
     await page.screenshot({
-      path: join(evidenceDirectory, 'image-mvp-workbench-editor-2026-07-23.png'),
+      path: join(evidenceDirectory, 'image-mvp-panel-generate-prompt-2026-07-23.png'),
       fullPage: true,
     });
   }
@@ -145,7 +155,7 @@ try {
   await firstResult.getByRole('button', { name: '继续创作' }).click();
   await page.getByRole('button', { name: '超分' }).click();
   await page.getByRole('dialog', { name: '超分参数' })
-    .getByRole('button', { name: '开始生成' }).click();
+    .getByRole('button', { name: '开始超分' }).click();
   await page.getByAltText('超分 1').waitFor({ timeout: 12_000 });
 
   log('lineage-adoption-review');
@@ -201,6 +211,146 @@ try {
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
+}
+
+async function exerciseToolPanelMatrix(page) {
+  const cases = [
+    { tool: '生成', dialog: '生成参数' },
+    { tool: '融图', dialog: '融图参数' },
+    { tool: '多角度', dialog: '多角度参数', expectScroll: true, screenshot: 'image-mvp-panel-angle-desktop-2026-07-23.png' },
+    { tool: '修改光影', dialog: '修改光影参数', expectScroll: true },
+    { tool: '去除', dialog: '去除参数' },
+    { tool: '抠图', dialog: '抠图参数', screenshot: 'image-mvp-panel-extract-desktop-2026-07-23.png' },
+    { tool: '扩图', dialog: '扩图参数' },
+    { tool: '超分', dialog: '超分参数' },
+  ];
+
+  for (const item of cases) {
+    await page.getByRole('button', { name: item.tool, exact: true }).click();
+    const panel = page.getByRole('dialog', { name: item.dialog });
+    await panel.waitFor();
+    await waitForPanelMotion(panel);
+    await assertToolPanelGeometry(panel, item.dialog, { expectScroll: item.expectScroll });
+    if (captureEvidence && item.screenshot) {
+      await page.screenshot({ path: join(evidenceDirectory, item.screenshot), fullPage: true });
+    }
+    await panel.getByRole('button', { name: '关闭参数面板' }).click();
+  }
+
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.getByRole('button', { name: '修改光影', exact: true }).click();
+  const scrollPanel = page.getByRole('dialog', { name: '修改光影参数' });
+  await waitForPanelMotion(scrollPanel);
+  await assertToolPanelGeometry(scrollPanel, '修改光影参数', { expectScroll: true });
+  if (captureEvidence) {
+    await page.screenshot({
+      path: join(evidenceDirectory, 'image-mvp-panel-scroll-1024-2026-07-23.png'),
+      fullPage: true,
+    });
+  }
+  await scrollPanel.getByRole('button', { name: '关闭参数面板' }).click();
+
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.getByRole('button', { name: '生成', exact: true }).click();
+  const mobilePanel = page.getByRole('dialog', { name: '生成参数' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertToolPanelGeometry(mobilePanel, '生成参数');
+  const mobileBounds = await mobilePanel.boundingBox();
+  if (!mobileBounds || Math.abs(mobileBounds.width - 390) > 1 || Math.abs(mobileBounds.height - 844) > 1) {
+    throw new Error('生成参数: 移动端面板未占满视口');
+  }
+  if (captureEvidence) {
+    await page.screenshot({
+      path: join(evidenceDirectory, 'image-mvp-panel-mobile-sheet-2026-07-23.png'),
+      fullPage: true,
+    });
+  }
+  await mobilePanel.getByRole('button', { name: '关闭参数面板' }).click();
+  await page.setViewportSize({ width: 1440, height: 960 });
+}
+
+async function assertToolPanelGeometry(panel, dialogName, options = {}) {
+  const metrics = await panel.evaluate((element) => {
+    const header = element.querySelector('[data-panel-region="header"]');
+    const body = element.querySelector('[data-panel-region="body"]');
+    const footer = element.querySelector('[data-panel-region="footer"]');
+    const action = footer?.querySelector('.generation-footer__run');
+    if (!header || !body || !footer || !action) return null;
+    const panelRect = element.getBoundingClientRect();
+    const headerRect = header.getBoundingClientRect();
+    const bodyRect = body.getBoundingClientRect();
+    const footerRect = footer.getBoundingClientRect();
+    const actionRect = action.getBoundingClientRect();
+    return {
+      panel: { top: panelRect.top, right: panelRect.right, bottom: panelRect.bottom, left: panelRect.left },
+      header: { top: headerRect.top, bottom: headerRect.bottom },
+      body: {
+        top: bodyRect.top,
+        bottom: bodyRect.bottom,
+        clientHeight: body.clientHeight,
+        scrollHeight: body.scrollHeight,
+        overflowY: globalThis.getComputedStyle(body).overflowY,
+      },
+      footer: { top: footerRect.top, bottom: footerRect.bottom },
+      actionHeight: actionRect.height,
+      viewportWidth: globalThis.innerWidth,
+      documentWidth: globalThis.document.documentElement.scrollWidth,
+    };
+  });
+
+  if (!metrics) throw new Error(`${dialogName}: 缺少三段式面板区域`);
+  if (metrics.header.bottom > metrics.body.top + 1 || metrics.body.bottom > metrics.footer.top + 1) {
+    throw new Error(`${dialogName}: Header、Body、Footer 发生重叠`);
+  }
+  if (Math.abs(metrics.actionHeight - 48) > 1) {
+    throw new Error(`${dialogName}: 主按钮高度不是 48px，实际 ${metrics.actionHeight}px`);
+  }
+  if (metrics.body.overflowY !== 'auto') throw new Error(`${dialogName}: Body 不是唯一滚动容器`);
+  if (!options.expectScroll && metrics.body.scrollHeight > metrics.body.clientHeight + 1) {
+    throw new Error(`${dialogName}: 少内容面板过早滚动`);
+  }
+  if (metrics.documentWidth > metrics.viewportWidth) throw new Error(`${dialogName}: 页面横向溢出`);
+}
+
+async function assertOrdinaryDialogGeometry(dialog, dialogName) {
+  const metrics = await dialog.evaluate((element) => {
+    const header = element.querySelector('header');
+    const body = element.querySelector('[class$="__body"]');
+    const footer = element.querySelector('footer');
+    if (!header || !body || !footer) return null;
+    const dialogRect = element.getBoundingClientRect();
+    const headerRect = header.getBoundingClientRect();
+    const bodyRect = body.getBoundingClientRect();
+    const footerRect = footer.getBoundingClientRect();
+    const bodyStyle = globalThis.getComputedStyle(body);
+    return {
+      dialogHeight: dialogRect.height,
+      viewportHeight: globalThis.innerHeight,
+      headerBottom: headerRect.bottom,
+      bodyTop: bodyRect.top,
+      bodyBottom: bodyRect.bottom,
+      footerTop: footerRect.top,
+      paddingLeft: bodyStyle.paddingLeft,
+      paddingRight: bodyStyle.paddingRight,
+      overflowY: bodyStyle.overflowY,
+    };
+  });
+
+  if (!metrics) throw new Error(`${dialogName}: 缺少 Header、Body 或 Footer`);
+  if (metrics.headerBottom > metrics.bodyTop + 1 || metrics.bodyBottom > metrics.footerTop + 1) {
+    throw new Error(`${dialogName}: Dialog 区域发生重叠`);
+  }
+  if (metrics.dialogHeight > metrics.viewportHeight - 47) throw new Error(`${dialogName}: Dialog 高度超出安全区域`);
+  if (metrics.paddingLeft !== '24px' || metrics.paddingRight !== '24px') {
+    throw new Error(`${dialogName}: Body 左右安全边距不是 24px`);
+  }
+  if (metrics.overflowY !== 'auto') throw new Error(`${dialogName}: Body 不是滚动边界`);
+}
+
+async function waitForPanelMotion(panel) {
+  await panel.evaluate((element) => Promise.all(
+    element.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+  ));
 }
 
 function createStatefulApi() {

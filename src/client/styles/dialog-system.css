@@ -1,0 +1,258 @@
+/* Content-sized dialog geometry shared by ordinary workbench forms. */
+
+.asset-upload-dialog,
+.export-dialog {
+  width: min(620px, calc(100vw - 48px));
+  height: auto;
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius-modal);
+  color: var(--text-primary);
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-modal);
+}
+
+.asset-upload-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, auto) auto auto;
+}
+
+.export-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, auto) auto;
+}
+
+.asset-upload-dialog > header,
+.export-dialog > header {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--stroke-subtle);
+  background: var(--surface-section);
+}
+
+.asset-upload-dialog > header > div,
+.export-dialog > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.asset-upload-dialog > header h2,
+.export-dialog > header strong {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--type-title);
+  line-height: 24px;
+}
+
+.asset-upload-dialog > header p,
+.export-dialog > header span {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--type-label);
+  line-height: 20px;
+}
+
+.asset-upload-dialog > header button,
+.export-dialog > header button {
+  width: var(--control-sm);
+  height: var(--control-sm);
+  flex: 0 0 var(--control-sm);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  background: transparent;
+}
+
+.asset-upload-dialog > header button:hover,
+.export-dialog > header button:hover {
+  border-color: var(--stroke-default);
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.asset-upload-dialog__body,
+.export-dialog__body {
+  min-height: 0;
+  padding: 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.asset-upload-dialog__body {
+  display: grid;
+  gap: 24px;
+}
+
+.export-dialog__body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.asset-upload-fields {
+  gap: 16px;
+}
+
+.asset-upload-dialog__body input:not([type="file"]),
+.asset-upload-dialog__body select,
+.export-dialog__body select {
+  min-height: var(--control-sm);
+  border: 1px solid var(--stroke-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: var(--surface-input);
+}
+
+.asset-upload-dropzone,
+.export-dialog fieldset,
+.export-dialog__filename,
+.organization-dialog__projects {
+  border-color: var(--stroke-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-section);
+}
+
+.asset-upload-dialog > .asset-upload-error,
+.export-dialog__error {
+  margin: 0;
+  padding: 0 24px 16px;
+  color: var(--color-danger-foreground);
+  font-size: var(--type-label);
+}
+
+.asset-upload-dialog > footer,
+.export-dialog > footer {
+  min-height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px 24px;
+  border-top: 1px solid var(--stroke-subtle);
+  background: var(--surface-panel);
+}
+
+.export-dialog > footer > span {
+  min-width: 0;
+  margin-right: auto;
+  color: var(--text-tertiary);
+  font-size: var(--type-caption);
+}
+
+.asset-upload-dialog > footer button,
+.export-dialog > footer button {
+  min-width: 88px;
+  height: var(--control-sm);
+  padding: 0 16px;
+  border: 1px solid var(--stroke-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: var(--surface-section);
+}
+
+.asset-upload-dialog > footer button.is-primary,
+.export-dialog > footer button.is-primary {
+  min-height: var(--control-md);
+  border-color: rgb(116 169 255 / 52%);
+  color: #fff;
+  background: var(--color-primary-solid);
+}
+
+.organization-dialog {
+  width: min(680px, calc(100vw - 48px));
+}
+
+.review-decision-dialog {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.organization-dialog__body,
+.review-decision-dialog__body {
+  gap: 24px;
+}
+
+.node-command-dialog {
+  width: 320px;
+  height: auto;
+  max-height: calc(100dvh - 48px);
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius-modal);
+  color: var(--text-primary);
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-floating);
+}
+
+.node-command-dialog > header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.node-command-dialog input,
+.node-command-dialog textarea {
+  min-height: var(--control-sm);
+  border-radius: var(--radius-sm);
+}
+
+.node-command-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.node-command-dialog > footer button {
+  min-width: 72px;
+  height: var(--control-sm);
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 480px) {
+  .asset-upload-dialog,
+  .organization-dialog,
+  .review-decision-dialog,
+  .export-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .asset-upload-dialog > header,
+  .export-dialog > header,
+  .asset-upload-dialog__body,
+  .export-dialog__body,
+  .asset-upload-dialog > footer,
+  .export-dialog > footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .export-dialog__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .export-dialog__body > * {
+    grid-column: 1;
+  }
+
+  .asset-upload-dialog > footer,
+  .export-dialog > footer {
+    flex-wrap: wrap;
+  }
+}

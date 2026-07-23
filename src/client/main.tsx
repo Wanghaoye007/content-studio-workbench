@@ -7,6 +7,8 @@ import App from './App';
 import './styles/styles.css';
 import './styles/design-tokens.css';
 import './styles/soft-glass.css';
+import './styles/workbench-panels.css';
+import './styles/dialog-system.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

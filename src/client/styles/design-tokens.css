@@ -27,6 +27,9 @@
   --surface-raised: rgb(27 33 42 / 84%);
   --surface-glass: rgb(20 25 32 / 66%);
   --surface-modal: rgb(20 25 32 / 95%);
+  --surface-canvas: #0b0e12;
+  --surface-panel: #15191f;
+  --surface-section: #1b2028;
 
   --text-primary: #f2f4f7;
   --text-secondary: #b9c0cc;
@@ -79,6 +82,11 @@
   --radius-lg: 16px;
   --radius-xl: 20px;
   --radius-pill: 999px;
+  --radius-section: 12px;
+  --radius-modal: 16px;
+
+  --control-sm: 40px;
+  --control-md: 48px;
 
   --shadow-contact: 0 6px 16px rgb(0 0 0 / 20%);
   --shadow-raised: 0 12px 30px rgb(0 0 0 / 24%);

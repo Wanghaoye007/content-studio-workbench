@@ -771,7 +771,7 @@ describe('workbench canvas', () => {
     render(<WorkbenchHarness onStateChange={(state) => { latestState = state; }} />);
 
     fireEvent.click(screen.getByRole('button', { name: '去除' }));
-    const runButton = screen.getByRole('button', { name: '开始生成' });
+    const runButton = screen.getByRole('button', { name: '开始去除' });
     expect(runButton).toBeDisabled();
     const canvas = screen.getByLabelText('去除蒙版画布');
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
@@ -845,7 +845,7 @@ describe('workbench canvas', () => {
     });
     fireEvent.click(within(panel).getByRole('checkbox', { name: '广角镜头' }));
     fireEvent.click(within(panel).getByRole('button', { name: '1' }));
-    fireEvent.click(within(panel).getByRole('button', { name: '开始生成' }));
+    fireEvent.click(within(panel).getByRole('button', { name: '生成视角' }));
 
     expect(latestState.jobs).toHaveLength(1);
     expect(latestState.jobs[0]).toMatchObject({
@@ -943,7 +943,7 @@ describe('workbench canvas', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '多角度' }));
     fireEvent.click(screen.getByRole('button', { name: '1' }));
-    fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
+    fireEvent.click(screen.getByRole('button', { name: '生成视角' }));
 
     await waitFor(() => expect(latestState.jobs[0]?.status).toBe('failed'));
     expect(latestState.jobs[0].errorMessage).toBe('Fal 服务暂时不可用');
@@ -965,7 +965,7 @@ describe('workbench canvas', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '多角度' }));
     fireEvent.click(screen.getByRole('button', { name: '1' }));
-    fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
+    fireEvent.click(screen.getByRole('button', { name: '生成视角' }));
     await waitFor(() => expect(latestState.jobs[0]?.externalExecution?.requestId).toBe('req-cancel-1'));
     fireEvent.click(screen.getByRole('button', { name: /任务队列/ }));
     fireEvent.click(screen.getByRole('button', { name: '取消任务' }));
@@ -990,7 +990,7 @@ describe('workbench canvas', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '多角度' }));
     fireEvent.click(screen.getByRole('button', { name: '1' }));
-    fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
+    fireEvent.click(screen.getByRole('button', { name: '生成视角' }));
     await waitFor(() => expect(latestState.jobs[0]?.externalExecution?.requestId).toBe('req-cancel-failed'));
     fireEvent.click(screen.getByRole('button', { name: /任务队列/ }));
     fireEvent.click(screen.getByRole('button', { name: '取消任务' }));
@@ -1028,7 +1028,7 @@ describe('workbench canvas', () => {
     fireEvent.click(within(panel).getByRole('checkbox', { name: '智能模式' }));
     fireEvent.click(within(panel).getByRole('checkbox', { name: '轮廓光' }));
     fireEvent.click(within(panel).getByRole('button', { name: '1' }));
-    fireEvent.click(within(panel).getByRole('button', { name: '开始生成' }));
+    fireEvent.click(within(panel).getByRole('button', { name: '生成光影修改' }));
 
     expect(latestState.jobs[0]?.inputSnapshot.parameters).toEqual({
       lightDirection: 'front',
@@ -1307,7 +1307,7 @@ describe('workbench canvas', () => {
     fireEvent.click(screen.getByRole('button', { name: '融图' }));
 
     expect(screen.getByRole('dialog', { name: '融图参数' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始融图' })).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: '创作描述' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '融图' })).toHaveAttribute('aria-pressed', 'true');
 
@@ -1419,7 +1419,7 @@ describe('workbench canvas', () => {
     const picker = screen.getByRole('dialog', { name: '节点类型选择器' });
     fireEvent.click(within(picker).getByRole('button', { name: '融图' }));
     expect(latestState).toEqual(initialState);
-    fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
+    fireEvent.click(screen.getByRole('button', { name: '开始融图' }));
 
     expect(latestState.jobs).toHaveLength(1);
     expect(latestState.jobs[0]).toMatchObject({ x: 380, y: 64, profileId: 'blend' });
@@ -1571,7 +1571,7 @@ describe('workbench canvas', () => {
     fireEvent.change(screen.getByRole('slider', { name: '光线强度' }), {
       target: { value: '72' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '开始生成' }));
+    fireEvent.click(screen.getByRole('button', { name: '生成光影修改' }));
 
     const branchScene = latestState.scenes.at(-1)!;
     const branchJob = latestState.jobs.at(-1)!;

@@ -1458,7 +1458,7 @@ function isCanvasNodeCreationDropTarget(target: EventTarget | null, stage: HTMLE
     '.react-flow__minimap',
     '.tool-palette',
     '.canvas-command-bar',
-    '.context-panel',
+    '.tool-panel',
     '.node-type-picker',
     '.asset-picker',
     '.task-tray',
