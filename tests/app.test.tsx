@@ -151,15 +151,11 @@ describe('Content Studio 中文应用框架', () => {
       };
     });
   });
-  it('参数面板方向与画布落点语义保持一致', () => {
-    const styles = readFileSync(`${process.cwd()}/src/client/styles/styles.css`, 'utf8');
+  it('参数面板由独立样式层固定在画布右侧', () => {
+    const styles = readFileSync(`${process.cwd()}/src/client/styles/workbench-panels.css`, 'utf8');
 
-    expect(styles).toMatch(
-      /\.context-panel\[data-placement="left"\]\s*\{[^}]*left:\s*76px;[^}]*right:\s*auto;/s,
-    );
-    expect(styles).toMatch(
-      /\.context-panel\[data-placement="right"\]\s*\{[^}]*right:\s*76px;[^}]*left:\s*auto;/s,
-    );
+    expect(styles).toMatch(/\.tool-panel\s*\{[^}]*inset:\s*0 0 0 auto;/s);
+    expect(styles).toMatch(/\.tool-panel\s*\{[^}]*width:\s*380px;/s);
   });
 
   it('移动端样式明确隐藏新增节点编辑控件', () => {
@@ -180,20 +176,23 @@ describe('Content Studio 中文应用框架', () => {
     );
   });
 
-  it('右侧编辑面板贯穿画布高度且 Prompt 支持纵向拖拽', () => {
-    const styles = readFileSync(`${process.cwd()}/src/client/styles/soft-glass.css`, 'utf8');
-    const finalLayer = styles.slice(styles.lastIndexOf('/* Image MVP docked panel compatibility */'));
+  it('右侧编辑面板只有 Body 滚动且 Prompt 支持纵向拖拽', () => {
+    const panelStyles = readFileSync(`${process.cwd()}/src/client/styles/workbench-panels.css`, 'utf8');
+    const softGlass = readFileSync(`${process.cwd()}/src/client/styles/soft-glass.css`, 'utf8');
 
-    expect(styles.lastIndexOf('/* Image MVP docked panel compatibility */'))
-      .toBeGreaterThan(styles.lastIndexOf('/* Content Studio 2026 workbench redesign layer. */'));
-    expect(finalLayer).toMatch(/\.context-panel,\s*\.context-panel\[data-tool="light"\][^{]*\{[^}]*top:\s*0;[^}]*right:\s*0;[^}]*bottom:\s*0;/s);
-    expect(finalLayer).toMatch(/\.context-panel textarea\s*\{[^}]*resize:\s*vertical;/s);
-    expect(finalLayer).toMatch(/\.canvas-stage\.is-panel-open \.react-flow\s*\{[^}]*right:\s*380px;/s);
-    expect(finalLayer).toMatch(
-      /\.segmented--counts button\[aria-pressed="false"\]\s*\{[^}]*background:\s*transparent;/s,
+    expect(panelStyles).toMatch(
+      /\.tool-panel\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto;[^}]*overflow:\s*hidden;/s,
     );
-    expect(finalLayer).toMatch(
-      /\.segmented--counts button\[aria-pressed="true"\]\s*\{[^}]*background:\s*rgb\(47 111 237 \/ 34%\);/s,
+    expect(panelStyles).toMatch(
+      /\.tool-panel__body\s*\{[^}]*align-items:\s*stretch;[^}]*overflow-y:\s*auto;/s,
+    );
+    expect(panelStyles).toMatch(/\.panel-field textarea\s*\{[^}]*resize:\s*vertical;/s);
+    expect(panelStyles).toMatch(/\.generation-footer__run\s*\{[^}]*min-height:\s*48px;/s);
+    expect(panelStyles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*\.canvas-stage\.is-panel-open\s*\{[^}]*z-index:\s*200;[\s\S]*\.tool-panel\s*\{[^}]*position:\s*fixed;[^}]*width:\s*100%;[^}]*background:\s*var\(--surface-panel\);/,
+    );
+    expect(softGlass).not.toMatch(
+      /\.(context-panel|advanced-editor-footer|segmented|range-control|toggle-control|reference-slot|remove-mask-status|credit-estimate|angle-risk)/,
     );
   });
 

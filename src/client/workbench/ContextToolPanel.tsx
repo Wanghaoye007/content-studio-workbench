@@ -1,7 +1,15 @@
-import { ArrowUp, RotateCcw, Search, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { RotateCcw, Search, X } from 'lucide-react';
+import { useMemo, useRef, useState, type RefObject } from 'react';
 import { getProfile, type Asset, type TaskParameters, type TaskProfileId } from '../../shared/domain';
 import { AngleEditor, LightEditor } from './AdvancedToolEditors';
+import { GenerationFooter } from './GenerationFooter';
+import {
+  PanelEmptyState,
+  PanelSection,
+  RangeControl,
+  SegmentedControl,
+} from './PanelControls';
+import { ToolPanelShell } from './ToolPanelShell';
 
 type ContextToolPanelProps = {
   tool: TaskProfileId;
@@ -29,54 +37,36 @@ type ContextToolPanelProps = {
   onRun: () => void;
 };
 
-const lightDirections = [
-  { label: '左上光', value: 'top-left' },
-  { label: '上方光', value: 'top' },
-  { label: '右上光', value: 'top-right' },
-  { label: '左侧光', value: 'left' },
-  { label: '右侧光', value: 'right' },
-  { label: '左下光', value: 'bottom-left' },
-  { label: '下方光', value: 'bottom' },
-  { label: '右下光', value: 'bottom-right' },
-];
-
 export function ContextToolPanel(props: ContextToolPanelProps) {
   const profile = getProfile(props.tool);
-  const isAdvancedEditor = props.tool === 'light' || props.tool === 'angle';
   const estimate = profile.costPerOutput * props.outputCount;
-  const cannotRun = props.isSubmitting
-    || (props.tool === 'remove' && !props.hasRemoveMask)
-    || estimate > props.availableCredits
-    || (props.tool === 'blend' && !props.referenceAssetId);
+  const disabledReason = getDisabledReason(props, estimate);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const referenceRef = useRef<HTMLButtonElement>(null);
+  const firstControlRef = useRef<HTMLInputElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  const initialFocusRef = getInitialFocusRef(
+    props.tool,
+    promptRef,
+    referenceRef,
+    firstControlRef,
+    primaryRef,
+  );
 
-  useEffect(() => {
-    promptRef.current?.focus();
-  }, []);
+  const advancedTool = props.tool === 'light' || props.tool === 'angle' ? props.tool : undefined;
+  const resetAdvancedEditor = advancedTool
+    ? () => resetAdvancedParameters(advancedTool, props.onParameterChange, props.onPromptChange)
+    : undefined;
 
-  return (
-    <section
-      aria-label={`${profile.label}参数`}
-      className="context-panel"
-      data-placement={props.placement ?? 'right'}
-      data-tool={props.tool}
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape') return;
-        event.preventDefault();
-        if (props.assetPickerOpen) props.onAssetPickerClose?.();
-        else props.onClose();
-      }}
-      role="dialog"
-    >
-      <header>
-        <div>
-          {!isAdvancedEditor && <small>图片处理</small>}
-          <strong>{props.tool === 'light' ? '修改光影' : props.tool === 'angle' ? '多角度编辑器' : profile.label}</strong>
-        </div>
-        <button aria-label="关闭参数面板" onClick={props.onClose} title="关闭参数面板" type="button">
-          <X size={17} />
-        </button>
-      </header>
+  const body = (
+    <>
+      {props.tool === 'blend' && (
+        <ReferenceAssetSlot
+          asset={props.assets.find((asset) => asset.id === props.referenceAssetId)}
+          buttonRef={referenceRef}
+          onOpen={() => props.onAssetPickerOpen?.()}
+        />
+      )}
 
       {props.tool === 'light' && (
         <>
@@ -85,57 +75,28 @@ export function ContextToolPanel(props: ContextToolPanelProps) {
             parameters={props.parameters}
             previewImageUrl={props.previewImageUrl}
           />
-          <AdvancedEditorFooter
-            estimate={estimate}
-            onOutputCountChange={props.onOutputCountChange}
-            onParameterChange={props.onParameterChange}
-            onPromptChange={props.onPromptChange}
-            onRatioChange={props.onRatioChange}
-            onRun={props.onRun}
-            outputCount={props.outputCount}
-            ratio={props.ratio}
-            disabled={cannotRun}
-            submitting={Boolean(props.isSubmitting)}
-            tool="light"
-          />
+          <p className="panel-risk-note" role="note">
+            实验能力：生成后请重点复核商品文字、颜色与材质
+          </p>
         </>
       )}
 
       {props.tool === 'angle' && (
-        <>
-          <AngleEditor
-            onParameterChange={props.onParameterChange}
-            parameters={props.parameters}
-            previewImageUrl={props.previewImageUrl}
-          />
-          <AdvancedEditorFooter
-            estimate={estimate}
-            onOutputCountChange={props.onOutputCountChange}
-            onParameterChange={props.onParameterChange}
-            onPromptChange={props.onPromptChange}
-            onRatioChange={props.onRatioChange}
-            onRun={props.onRun}
-            outputCount={props.outputCount}
-            ratio={props.ratio}
-            disabled={cannotRun}
-            submitting={Boolean(props.isSubmitting)}
-            tool="angle"
-          />
-        </>
-      )}
-
-      {!isAdvancedEditor && <>{props.tool === 'blend' && (
-        <ReferenceAssetSlot
-          asset={props.assets.find((asset) => asset.id === props.referenceAssetId)}
-          onOpen={() => props.onAssetPickerOpen?.()}
+        <AngleEditor
+          onParameterChange={props.onParameterChange}
+          parameters={props.parameters}
+          previewImageUrl={props.previewImageUrl}
         />
       )}
 
-      <ToolSpecificControls
-        onParameterChange={props.onParameterChange}
-        parameters={props.parameters}
-        tool={props.tool}
-      />
+      {!['light', 'angle', 'extract'].includes(props.tool) && (
+        <ToolSpecificControls
+          firstControlRef={firstControlRef}
+          onParameterChange={props.onParameterChange}
+          parameters={props.parameters}
+          tool={props.tool}
+        />
+      )}
 
       {props.tool === 'remove' && (
         <div className="remove-mask-status" data-ready={props.hasRemoveMask ? 'true' : 'false'}>
@@ -153,187 +114,138 @@ export function ContextToolPanel(props: ContextToolPanelProps) {
         </div>
       )}
 
-      {['generate', 'light', 'expand'].includes(props.tool) && (
-        <label className="context-panel__field">
-          <span>补充描述（可选）</span>
-          <textarea
-            aria-label="创作描述"
-            onChange={(event) => props.onPromptChange(event.target.value)}
-            placeholder={promptPlaceholder(props.tool)}
-            ref={promptRef}
-            value={props.prompt}
-          />
-        </label>
+      {['generate', 'expand'].includes(props.tool) && (
+        <PanelSection className="panel-section--prompt">
+          <label className="panel-field panel-field--prompt">
+            <span>补充描述（可选）</span>
+            <textarea
+              aria-label="创作描述"
+              onChange={(event) => props.onPromptChange(event.target.value)}
+              placeholder={promptPlaceholder(props.tool)}
+              ref={promptRef}
+              value={props.prompt}
+            />
+          </label>
+        </PanelSection>
       )}
 
-      {props.tool === 'angle' && (
-        <p className="angle-risk" role="note">AI 会推断不可见区域，结果需人工复核</p>
-      )}
-
-      {props.tool === 'light' && (
-        <p className="angle-risk" role="note">实验能力：生成后请重点复核商品文字、颜色与材质</p>
-      )}
-
-      {!['remove', 'extract', 'upscale'].includes(props.tool) && (
-        <fieldset className="segmented segmented--counts">
-          <legend>输出数量</legend>
-          {[1, 2, 4].map((count) => (
-            <button
-              aria-pressed={count === props.outputCount}
-              className={count === props.outputCount ? 'is-active' : ''}
-              key={count}
-              onClick={() => props.onOutputCountChange(count)}
-              type="button"
-            >
-              {count}
-            </button>
-          ))}
-        </fieldset>
-      )}
-
-      {['generate', 'blend', 'angle', 'expand'].includes(props.tool) && (
-        <label className="context-panel__field context-panel__field--inline">
-          <span>画面比例</span>
-          <select
-            aria-label="画面比例"
-            onChange={(event) => props.onRatioChange(event.target.value)}
-            value={props.ratio}
-          >
-            <option value="1:1">1:1</option>
-            <option value="4:5">4:5</option>
-            <option value="3:4">3:4</option>
-            <option value="4:3">4:3</option>
-            <option value="16:9">16:9</option>
-            <option value="9:16">9:16</option>
-          </select>
-        </label>
-      )}
-
-      <footer className="context-panel__footer">
-        <div className="credit-estimate">
-          <span>预计消耗</span>
-          <strong>{estimate} 点</strong>
-        </div>
-        {estimate > props.availableCredits && <p role="alert">可用额度不足</p>}
-        <button
-          aria-label="开始生成"
-          className="primary-action"
-          disabled={cannotRun}
-          onClick={props.onRun}
-          type="button"
-        >
-          {props.isSubmitting ? '正在提交' : actionLabel(props.tool)}
-        </button>
-      </footer>
-
-      {props.assetPickerOpen && (
-        <AssetPicker
-          assets={props.assets}
-          onClose={() => props.onAssetPickerClose?.()}
-          onSelect={(assetId) => {
-            props.onReferenceAssetChange(assetId);
-            props.onAssetPickerClose?.();
-          }}
-          selectedAssetId={props.referenceAssetId}
+      {props.tool === 'extract' && (
+        <PanelEmptyState
+          description="将自动识别主体并输出透明背景图片"
+          title="无需额外参数"
         />
-      )}</>}
-    </section>
+      )}
+    </>
   );
-}
 
-function AdvancedEditorFooter({
-  tool,
-  outputCount,
-  ratio,
-  estimate,
-  disabled,
-  submitting,
-  onOutputCountChange,
-  onRatioChange,
-  onParameterChange,
-  onPromptChange,
-  onRun,
-}: {
-  tool: 'light' | 'angle';
-  outputCount: number;
-  ratio: string;
-  estimate: number;
-  disabled: boolean;
-  submitting: boolean;
-  onOutputCountChange: (count: number) => void;
-  onRatioChange: (ratio: string) => void;
-  onParameterChange: (key: string, value: string | number | boolean) => void;
-  onPromptChange: (prompt: string) => void;
-  onRun: () => void;
-}) {
-  const reset = () => {
-    if (tool === 'light') {
-      onParameterChange('lightDirection', 'front');
-      onParameterChange('lightIntensity', 50);
-      onParameterChange('lightTemperature', 5200);
-      onParameterChange('lightSmartMode', false);
-      onParameterChange('rimLight', false);
-    } else {
-      onParameterChange('horizontalAngle', -45);
-      onParameterChange('moveForward', 0);
-      onParameterChange('verticalView', -0.7);
-      onParameterChange('wideAngle', false);
-    }
-    onPromptChange('');
-  };
+  const footer = (
+    <GenerationFooter
+      actionLabel={actionLabel(props.tool)}
+      disabled={Boolean(props.isSubmitting || disabledReason)}
+      disabledReason={disabledReason}
+      estimate={estimate}
+      onOutputCountChange={props.onOutputCountChange}
+      onRatioChange={props.onRatioChange}
+      onReset={resetAdvancedEditor}
+      onRun={props.onRun}
+      outputCount={props.outputCount}
+      primaryRef={primaryRef}
+      ratio={props.ratio}
+      showOutput={!['remove', 'extract', 'upscale'].includes(props.tool)}
+      showRatio={['generate', 'blend', 'angle', 'expand'].includes(props.tool)}
+      submitting={Boolean(props.isSubmitting)}
+    />
+  );
+
+  const overlay = props.assetPickerOpen ? (
+    <AssetPicker
+      assets={props.assets}
+      onClose={() => props.onAssetPickerClose?.()}
+      onSelect={(assetId) => {
+        props.onReferenceAssetChange(assetId);
+        props.onAssetPickerClose?.();
+      }}
+      selectedAssetId={props.referenceAssetId}
+    />
+  ) : undefined;
 
   return (
-    <footer className="advanced-editor-footer">
-      <button className="advanced-editor-footer__reset" onClick={reset} type="button">
-        <RotateCcw aria-hidden="true" size={17} />
-        <span>重置参数</span>
-      </button>
-      <div aria-label="输出数量" className="advanced-editor-footer__count" role="group">
-        <span>输出</span>
-        {[1, 2, 4].map((count) => (
-          <button
-            aria-pressed={count === outputCount}
-            key={count}
-            onClick={() => onOutputCountChange(count)}
-            type="button"
-          >
-            {count}
-          </button>
-        ))}
-      </div>
-      {tool === 'angle' && (
-        <label className="advanced-editor-footer__ratio">
-          <span>比例</span>
-          <select aria-label="画面比例" onChange={(event) => onRatioChange(event.target.value)} value={ratio}>
-            <option value="1:1">1:1</option>
-            <option value="4:5">4:5</option>
-            <option value="3:4">3:4</option>
-            <option value="4:3">4:3</option>
-            <option value="16:9">16:9</option>
-            <option value="9:16">9:16</option>
-          </select>
-        </label>
-      )}
-      <span className="advanced-editor-footer__credit">预计 {estimate} 点</span>
-      <button
-        aria-label="开始生成"
-        className="advanced-editor-footer__run"
-        disabled={disabled}
-        onClick={onRun}
-        type="button"
-      >
-        <span>{submitting ? '提交中' : tool === 'light' ? '生成光影修改' : '生成视角'}</span>
-        <ArrowUp aria-hidden="true" size={19} strokeWidth={2.2} />
-      </button>
-    </footer>
+    <ToolPanelShell
+      ariaLabel={`${profile.label}参数`}
+      body={body}
+      eyebrow="图片处理"
+      footer={footer}
+      initialFocusRef={initialFocusRef}
+      onClose={props.onClose}
+      onEscape={props.assetPickerOpen ? props.onAssetPickerClose : undefined}
+      overlay={overlay}
+      placement={props.placement}
+      title={profile.label}
+      toolId={props.tool}
+    />
   );
 }
 
-function ReferenceAssetSlot({ asset, onOpen }: { asset?: Asset; onOpen: () => void }) {
+function getInitialFocusRef(
+  tool: TaskProfileId,
+  promptRef: RefObject<HTMLTextAreaElement | null>,
+  referenceRef: RefObject<HTMLButtonElement | null>,
+  firstControlRef: RefObject<HTMLInputElement | null>,
+  primaryRef: RefObject<HTMLButtonElement | null>,
+): RefObject<HTMLElement | null> | undefined {
+  if (tool === 'generate' || tool === 'expand') return promptRef;
+  if (tool === 'blend') return referenceRef;
+  if (tool === 'remove') return firstControlRef;
+  if (tool === 'extract') return primaryRef;
+  return undefined;
+}
+
+function getDisabledReason(props: ContextToolPanelProps, estimate: number): string | undefined {
+  if (props.tool === 'remove' && !props.hasRemoveMask) {
+    return '请先在图片上涂抹要去除的区域';
+  }
+  if (props.tool === 'blend' && !props.referenceAssetId) {
+    return '请选择参考素材';
+  }
+  if (estimate > props.availableCredits) {
+    return '可用额度不足';
+  }
+  return undefined;
+}
+
+function resetAdvancedParameters(
+  tool: 'light' | 'angle',
+  onParameterChange: ContextToolPanelProps['onParameterChange'],
+  onPromptChange: ContextToolPanelProps['onPromptChange'],
+) {
+  if (tool === 'light') {
+    onParameterChange('lightDirection', 'front');
+    onParameterChange('lightIntensity', 50);
+    onParameterChange('lightTemperature', 5200);
+    onParameterChange('lightSmartMode', false);
+    onParameterChange('rimLight', false);
+  } else {
+    onParameterChange('horizontalAngle', -45);
+    onParameterChange('moveForward', 0);
+    onParameterChange('verticalView', -0.7);
+    onParameterChange('wideAngle', false);
+  }
+  onPromptChange('');
+}
+
+function ReferenceAssetSlot({
+  asset,
+  buttonRef,
+  onOpen,
+}: {
+  asset?: Asset;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  onOpen: () => void;
+}) {
   return (
     <div className="reference-slot">
       <span>参考素材</span>
-      <button aria-label="选择参考素材" autoFocus onClick={onOpen} type="button">
+      <button aria-label="选择参考素材" onClick={onOpen} ref={buttonRef} type="button">
         {asset ? (
           <>
             <img alt="" src={asset.imageUrl} />
@@ -408,18 +320,20 @@ function AssetPicker({
 }
 
 function ToolSpecificControls({
+  firstControlRef,
   tool,
   parameters,
   onParameterChange,
 }: {
+  firstControlRef: RefObject<HTMLInputElement | null>;
   tool: TaskProfileId;
   parameters: TaskParameters;
   onParameterChange: (key: string, value: string | number | boolean) => void;
 }) {
   if (tool === 'generate') {
     return (
-      <>
-        <SegmentedOptions
+      <PanelSection>
+        <SegmentedControl
           label="场景模板"
           onChange={(value) => onParameterChange('sceneTemplate', value)}
           options={[
@@ -429,7 +343,7 @@ function ToolSpecificControls({
           ]}
           value={String(parameters.sceneTemplate ?? '日光展台')}
         />
-        <SegmentedOptions
+        <SegmentedControl
           label="质量"
           onChange={(value) => onParameterChange('quality', value)}
           options={[
@@ -438,96 +352,36 @@ function ToolSpecificControls({
           ]}
           value={String(parameters.quality ?? '精细')}
         />
-      </>
+      </PanelSection>
     );
   }
 
   if (tool === 'blend') {
     return (
-      <SegmentedOptions
-        label="商品位置"
-        onChange={(value) => onParameterChange('productPlacement', value)}
-        options={[
-          { label: '左侧', value: 'left_center' },
-          { label: '居中', value: 'center_vertical' },
-          { label: '右侧', value: 'right_center' },
-          { label: '左下', value: 'bottom_left' },
-          { label: '下方', value: 'bottom_center' },
-          { label: '右下', value: 'bottom_right' },
-        ]}
-        value={String(parameters.productPlacement ?? 'bottom_center')}
-      />
-    );
-  }
-
-  if (tool === 'light') {
-    return (
-      <>
-        <SegmentedOptions
-          className="segmented--directions"
-          label="光源方向"
-          onChange={(value) => onParameterChange('lightDirection', value)}
-          options={lightDirections}
-          value={String(parameters.lightDirection ?? 'top-right')}
+      <PanelSection>
+        <SegmentedControl
+          className="panel-segmented--placement"
+          label="商品位置"
+          onChange={(value) => onParameterChange('productPlacement', value)}
+          options={[
+            { label: '左侧', value: 'left_center' },
+            { label: '居中', value: 'center_vertical' },
+            { label: '右侧', value: 'right_center' },
+            { label: '左下', value: 'bottom_left' },
+            { label: '下方', value: 'bottom_center' },
+            { label: '右下', value: 'bottom_right' },
+          ]}
+          value={String(parameters.productPlacement ?? 'bottom_center')}
         />
-        <RangeControl
-          label="光线强度"
-          onChange={(value) => onParameterChange('lightIntensity', value)}
-          value={numberValue(parameters.lightIntensity, 60)}
-        />
-        <RangeControl
-          label="色温"
-          max={7500}
-          min={2800}
-          onChange={(value) => onParameterChange('lightTemperature', value)}
-          step={100}
-          suffix="K"
-          value={numberValue(parameters.lightTemperature, 5200)}
-        />
-      </>
-    );
-  }
-
-  if (tool === 'angle') {
-    return (
-      <>
-        <RangeControl
-          label="水平旋转"
-          max={180}
-          min={-180}
-          onChange={(value) => onParameterChange('horizontalAngle', value)}
-          suffix="°"
-          value={numberValue(parameters.horizontalAngle, 0)}
-        />
-        <RangeControl
-          label="镜头推进"
-          max={10}
-          min={0}
-          onChange={(value) => onParameterChange('moveForward', value)}
-          value={numberValue(parameters.moveForward, 0)}
-        />
-        <RangeControl
-          label="垂直视角"
-          max={1}
-          min={-1}
-          onChange={(value) => onParameterChange('verticalView', value)}
-          step={0.1}
-          value={numberValue(parameters.verticalView, 0)}
-        />
-        <BooleanControl
-          checked={Boolean(parameters.wideAngle)}
-          label="广角镜头"
-          onChange={(value) => onParameterChange('wideAngle', value)}
-        />
-      </>
+      </PanelSection>
     );
   }
 
   if (tool === 'expand') {
     return (
-      <>
-        <SegmentedOptions
-          className="segmented--anchors"
+      <PanelSection>
+        <SegmentedControl
+          className="panel-segmented--anchors"
           label="原图锚点"
           onChange={(value) => onParameterChange('expandAnchor', value)}
           options={[
@@ -551,14 +405,14 @@ function ToolSpecificControls({
           suffix="%"
           value={numberValue(parameters.expandScale, 72)}
         />
-      </>
+      </PanelSection>
     );
   }
 
   if (tool === 'upscale') {
     return (
-      <>
-        <SegmentedOptions
+      <PanelSection>
+        <SegmentedControl
           label="目标尺寸"
           onChange={(value) => onParameterChange('upscaleSize', value)}
           options={[
@@ -573,107 +427,24 @@ function ToolSpecificControls({
           onChange={(value) => onParameterChange('detailLevel', value)}
           value={numberValue(parameters.detailLevel, 60)}
         />
-      </>
+      </PanelSection>
     );
   }
 
   if (tool === 'remove') {
     return (
-      <RangeControl
-        label="笔刷大小"
-        onChange={(value) => onParameterChange('brushSize', value)}
-        value={numberValue(parameters.brushSize, 42)}
-      />
+      <PanelSection>
+        <RangeControl
+          inputRef={firstControlRef}
+          label="笔刷大小"
+          onChange={(value) => onParameterChange('brushSize', value)}
+          value={numberValue(parameters.brushSize, 42)}
+        />
+      </PanelSection>
     );
   }
 
   return null;
-}
-
-function BooleanControl({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <label className="toggle-control">
-      <span>{label}</span>
-      <input
-        aria-label={label}
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        type="checkbox"
-      />
-    </label>
-  );
-}
-
-function SegmentedOptions({
-  label,
-  options,
-  value,
-  onChange,
-  className = '',
-}: {
-  label: string;
-  options: Array<{ label: string; value: string }>;
-  value: string;
-  onChange: (value: string) => void;
-  className?: string;
-}) {
-  return (
-    <fieldset className={`segmented ${className}`}>
-      <legend>{label}</legend>
-      {options.map((option) => (
-        <button
-          aria-pressed={option.value === value}
-          className={option.value === value ? 'is-active' : ''}
-          key={option.value}
-          onClick={() => onChange(option.value)}
-          type="button"
-        >
-          {option.label}
-        </button>
-      ))}
-    </fieldset>
-  );
-}
-
-function RangeControl({
-  label,
-  value,
-  onChange,
-  min = 0,
-  max = 100,
-  step = 1,
-  suffix = '',
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-  min?: number;
-  max?: number;
-  step?: number;
-  suffix?: string;
-}) {
-  return (
-    <label className="range-control">
-      <span>{label}<output>{value}{suffix}</output></span>
-      <input
-        aria-label={label}
-        max={max}
-        min={min}
-        onChange={(event) => onChange(Number(event.target.value))}
-        step={step}
-        type="range"
-        value={value}
-      />
-    </label>
-  );
 }
 
 function numberValue(value: unknown, fallback: number): number {
@@ -681,18 +452,17 @@ function numberValue(value: unknown, fallback: number): number {
 }
 
 function promptPlaceholder(tool: TaskProfileId): string {
-  if (tool === 'blend') return '例如：保留瓶身文字与材质';
-  if (tool === 'light') return '例如：柔和商业棚拍光';
+  if (tool === 'expand') return '例如：向画面外延展同一空间与光线';
   return '可补充构图、材质或品牌要求';
 }
 
 function actionLabel(tool: TaskProfileId): string {
+  if (tool === 'blend') return '开始融图';
+  if (tool === 'angle') return '生成视角';
+  if (tool === 'light') return '生成光影修改';
+  if (tool === 'remove') return '开始去除';
+  if (tool === 'extract') return '开始抠图';
   if (tool === 'expand') return '开始扩图';
   if (tool === 'upscale') return '开始超分';
-  if (tool === 'angle') return '生成视角';
-  if (tool === 'light') return '生成打光';
-  if (tool === 'blend') return '开始合成';
-  if (tool === 'remove') return '开始移除';
-  if (tool === 'extract') return '开始抠图';
   return '开始生成';
 }
