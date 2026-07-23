@@ -591,6 +591,15 @@
     inset: 0;
     width: 100%;
     border-left: 0;
+    background: var(--surface-panel);
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .tool-panel__header,
+  .tool-panel__footer {
+    background: var(--surface-panel);
+    backdrop-filter: none;
   }
 
   .tool-panel__header,
