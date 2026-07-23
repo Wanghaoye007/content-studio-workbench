@@ -253,6 +253,7 @@ async function exerciseToolPanelMatrix(page) {
   await page.getByRole('button', { name: '生成', exact: true }).click();
   const mobilePanel = page.getByRole('dialog', { name: '生成参数' });
   await page.setViewportSize({ width: 390, height: 844 });
+  await waitForPanelMotion(mobilePanel);
   await assertToolPanelGeometry(mobilePanel, '生成参数');
   const mobileBounds = await mobilePanel.boundingBox();
   if (!mobileBounds || Math.abs(mobileBounds.width - 390) > 1 || Math.abs(mobileBounds.height - 844) > 1) {
